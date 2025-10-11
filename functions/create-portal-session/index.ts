@@ -1,0 +1,94 @@
+// Storage Valet — Create Portal Session Edge Function
+// v3.1 • Generates Stripe Hosted Customer Portal session URL
+
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno'
+
+const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
+  apiVersion: '2023-10-16',
+  httpClient: Stripe.createFetchHttpClient(),
+})
+
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+
+serve(async (req) => {
+  // CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', {
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+      },
+    })
+  }
+
+  try {
+    // Get authenticated user from Supabase JWT
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: 'Missing authorization header' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+      global: { headers: { Authorization: authHeader } },
+    })
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
+
+    if (userError || !user) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    // Get Stripe customer ID from customer_profile
+    const { data: profile, error: profileError } = await supabase
+      .from('customer_profile')
+      .select('stripe_customer_id')
+      .eq('user_id', user.id)
+      .single()
+
+    if (profileError || !profile?.stripe_customer_id) {
+      return new Response(
+        JSON.stringify({ error: 'No active subscription found' }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Create Stripe Customer Portal session
+    const session = await stripe.billingPortal.sessions.create({
+      customer: profile.stripe_customer_id,
+      return_url: `${Deno.env.get('APP_URL')}/account`,
+    })
+
+    return new Response(
+      JSON.stringify({ url: session.url }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        },
+      }
+    )
+  } catch (error) {
+    console.error('create-portal-session error:', error)
+    return new Response(
+      JSON.stringify({ error: error.message || 'Internal server error' }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    )
+  }
+})
