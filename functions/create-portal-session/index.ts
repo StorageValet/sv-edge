@@ -3,7 +3,7 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import Stripe from 'https://esm.sh/stripe@14.21.0?target=deno'
+import Stripe from 'https://esm.sh/stripe@13.17.0?target=deno'
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
   apiVersion: '2023-10-16',
@@ -19,15 +19,15 @@ serve(async (req) => {
     return new Response('ok', {
       headers: {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
         'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
       },
     })
   }
 
   try {
-    // Get authenticated user from Supabase JWT
-    const authHeader = req.headers.get('Authorization')
+    // Extract and verify JWT token
+    const authHeader = req.headers.get('Authorization') || req.headers.get('authorization')
     if (!authHeader) {
       return new Response(JSON.stringify({ error: 'Missing authorization header' }), {
         status: 401,
@@ -35,14 +35,13 @@ serve(async (req) => {
       })
     }
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-      global: { headers: { Authorization: authHeader } },
-    })
+    const token = authHeader.replace(/^Bearer\s+/i, '')
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser()
+    // Create Supabase client with service role (admin)
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey)
+
+    // Verify caller using their access token
+    const { data: { user }, error: userError } = await supabaseAdmin.auth.getUser(token)
 
     if (userError || !user) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -51,14 +50,14 @@ serve(async (req) => {
       })
     }
 
-    // Get Stripe customer ID from customer_profile
-    const { data: profile, error: profileError } = await supabase
-      .from('customer_profile')
+    // Look up Stripe customer ID from billing.customers table
+    const { data, error: queryError } = await supabaseAdmin
+      .from('customers')
       .select('stripe_customer_id')
       .eq('user_id', user.id)
-      .single()
+      .maybeSingle()
 
-    if (profileError || !profile?.stripe_customer_id) {
+    if (queryError || !data?.stripe_customer_id) {
       return new Response(
         JSON.stringify({ error: 'No active subscription found' }),
         { status: 404, headers: { 'Content-Type': 'application/json' } }
@@ -67,7 +66,7 @@ serve(async (req) => {
 
     // Create Stripe Customer Portal session
     const session = await stripe.billingPortal.sessions.create({
-      customer: profile.stripe_customer_id,
+      customer: data.stripe_customer_id,
       return_url: `${Deno.env.get('APP_URL')}/account`,
     })
 
