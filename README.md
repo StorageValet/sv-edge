@@ -111,3 +111,15 @@ stripe trigger checkout.session.completed
 - **Auto-confirm users**: New customers are email-confirmed immediately
 - **Magic link delivery**: Sent automatically after checkout completion
 - **RLS-safe**: Uses service role key; Auth policies enforced at row level
+
+---
+
+### Project docs
+Core specs & runbooks: **https://github.com/mystoragevalet/sv-docs**
+
+- Implementation Plan v3.1
+- Final Validation Checklist v3.1
+- Deployment Instructions v3.1
+- Go–NoGo (Line in the Sand) v3.1
+- Business Context & Requirements v3.1
+- Runbooks (webhook tests, env setup, smoke tests)
