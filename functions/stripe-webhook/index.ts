@@ -77,11 +77,14 @@ serve(async (req) => {
         await handleSubscriptionDeleted(supabase, subscription)
         break
       }
-      case 'invoice.payment_succeeded':
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object as Stripe.Invoice
+        await handleInvoicePaymentSucceeded(supabase, invoice)
+        break
+      }
       case 'invoice.payment_failed': {
         const invoice = event.data.object as Stripe.Invoice
-        console.log(`Invoice ${event.type}:`, invoice.id)
-        // Future: update payment status in customer_profile
+        await handleInvoicePaymentFailed(supabase, invoice)
         break
       }
       default:
@@ -225,4 +228,52 @@ async function handleSubscriptionDeleted(supabase: any, subscription: Stripe.Sub
   }).eq('user_id', profile.user_id)
 
   console.log(`Subscription ${subscription.id} canceled for user ${profile.user_id}`)
+}
+
+// Handle invoice payment succeeded
+async function handleInvoicePaymentSucceeded(supabase: any, invoice: Stripe.Invoice) {
+  const stripeCustomerId = invoice.customer as string
+
+  const { data: profile } = await supabase
+    .from('customer_profile')
+    .select('user_id')
+    .eq('stripe_customer_id', stripeCustomerId)
+    .single()
+
+  if (!profile) {
+    console.error(`No profile found for Stripe customer ${stripeCustomerId}`)
+    return
+  }
+
+  // Update subscription status to active on successful payment
+  await supabase.from('customer_profile').update({
+    subscription_status: 'active',
+    last_payment_at: new Date().toISOString(),
+  }).eq('user_id', profile.user_id)
+
+  console.log(`Invoice ${invoice.id} payment succeeded for user ${profile.user_id}`)
+}
+
+// Handle invoice payment failed
+async function handleInvoicePaymentFailed(supabase: any, invoice: Stripe.Invoice) {
+  const stripeCustomerId = invoice.customer as string
+
+  const { data: profile } = await supabase
+    .from('customer_profile')
+    .select('user_id')
+    .eq('stripe_customer_id', stripeCustomerId)
+    .single()
+
+  if (!profile) {
+    console.error(`No profile found for Stripe customer ${stripeCustomerId}`)
+    return
+  }
+
+  // Update subscription status to past_due on failed payment
+  await supabase.from('customer_profile').update({
+    subscription_status: 'past_due',
+    last_payment_failed_at: new Date().toISOString(),
+  }).eq('user_id', profile.user_id)
+
+  console.log(`Invoice ${invoice.id} payment failed for user ${profile.user_id}`)
 }
