@@ -34,9 +34,10 @@ serve(async (req) => {
 
     // Initialize Supabase client with service role
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
+    const billing = supabase.schema('billing')
 
     // IDEMPOTENCY CHECK: Insert event_id first (fails if duplicate)
-    const { error: insertError } = await supabase
+    const { error: insertError } = await billing
       .from('webhook_events')
       .insert({
         event_id: event.id,
@@ -153,7 +154,8 @@ async function handleCheckoutCompleted(
   }
 
   // Upsert billing.customers (denormalized)
-  await supabase.from('customers').upsert(
+  const billing = supabase.schema('billing')
+  await billing.from('customers').upsert(
     {
       user_id: userId,
       stripe_customer_id: stripeCustomerId,

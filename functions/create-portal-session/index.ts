@@ -51,7 +51,8 @@ serve(async (req) => {
     }
 
     // Look up Stripe customer ID from billing.customers table
-    const { data, error: queryError } = await supabaseAdmin
+    const billing = supabaseAdmin.schema('billing')
+    const { data, error: queryError } = await billing
       .from('customers')
       .select('stripe_customer_id')
       .eq('user_id', user.id)

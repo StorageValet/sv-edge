@@ -51,8 +51,8 @@ serve(async (req) => {
           quantity: 1,
         },
       ],
-      success_url: `${Deno.env.get('APP_URL')}/dashboard?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${Deno.env.get('APP_URL') || 'https://mystoragevalet.com'}`,
+      success_url: `${Deno.env.get('APP_URL') || 'https://portal.mystoragevalet.com'}/dashboard?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${Deno.env.get('APP_URL') || 'https://portal.mystoragevalet.com'}`,
       metadata,
       allow_promotion_codes: true, // Enable promo codes in Stripe UI
     }
