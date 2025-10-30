@@ -199,11 +199,17 @@ async function handleSubscriptionChange(supabase: any, subscription: Stripe.Subs
     return
   }
 
-  // Update subscription status
-  await supabase.from('customer_profile').update({
-    subscription_status: subscription.status,
-    subscription_id: subscription.id,
-  }).eq('user_id', profile.user_id)
+  // Use SECURITY DEFINER function to update subscription status (bypasses RLS)
+  const { error } = await supabase.rpc('update_subscription_status', {
+    p_user_id: profile.user_id,
+    p_status: subscription.status,
+    p_subscription_id: subscription.id,
+  })
+
+  if (error) {
+    console.error(`Failed to update subscription: ${error.message}`)
+    throw error
+  }
 
   console.log(`Subscription ${subscription.id} updated to ${subscription.status}`)
 }
@@ -223,9 +229,16 @@ async function handleSubscriptionDeleted(supabase: any, subscription: Stripe.Sub
     return
   }
 
-  await supabase.from('customer_profile').update({
-    subscription_status: 'canceled',
-  }).eq('user_id', profile.user_id)
+  // Use SECURITY DEFINER function to update subscription status (bypasses RLS)
+  const { error } = await supabase.rpc('update_subscription_status', {
+    p_user_id: profile.user_id,
+    p_status: 'canceled',
+  })
+
+  if (error) {
+    console.error(`Failed to update subscription: ${error.message}`)
+    throw error
+  }
 
   console.log(`Subscription ${subscription.id} canceled for user ${profile.user_id}`)
 }
@@ -245,11 +258,17 @@ async function handleInvoicePaymentSucceeded(supabase: any, invoice: Stripe.Invo
     return
   }
 
-  // Update subscription status to active on successful payment
-  await supabase.from('customer_profile').update({
-    subscription_status: 'active',
-    last_payment_at: new Date().toISOString(),
-  }).eq('user_id', profile.user_id)
+  // Use SECURITY DEFINER function to update subscription status (bypasses RLS)
+  const { error } = await supabase.rpc('update_subscription_status', {
+    p_user_id: profile.user_id,
+    p_status: 'active',
+    p_last_payment_at: new Date().toISOString(),
+  })
+
+  if (error) {
+    console.error(`Failed to update subscription status: ${error.message}`)
+    throw error
+  }
 
   console.log(`Invoice ${invoice.id} payment succeeded for user ${profile.user_id}`)
 }
@@ -269,11 +288,17 @@ async function handleInvoicePaymentFailed(supabase: any, invoice: Stripe.Invoice
     return
   }
 
-  // Update subscription status to past_due on failed payment
-  await supabase.from('customer_profile').update({
-    subscription_status: 'past_due',
-    last_payment_failed_at: new Date().toISOString(),
-  }).eq('user_id', profile.user_id)
+  // Use SECURITY DEFINER function to update subscription status (bypasses RLS)
+  const { error } = await supabase.rpc('update_subscription_status', {
+    p_user_id: profile.user_id,
+    p_status: 'past_due',
+    p_last_payment_failed_at: new Date().toISOString(),
+  })
+
+  if (error) {
+    console.error(`Failed to update subscription status: ${error.message}`)
+    throw error
+  }
 
   console.log(`Invoice ${invoice.id} payment failed for user ${profile.user_id}`)
 }
