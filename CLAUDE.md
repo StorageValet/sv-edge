@@ -138,9 +138,21 @@ Stripe-managed columns (`subscription_status`, `stripe_customer_id`, etc.) are *
 - `create-portal-session`: Creates Stripe Customer Portal session
 - `stripe-webhook`: Handles subscription lifecycle events
 
-**Current Status:** All 3 functions deployed, LIVE mode verified (Oct 24)
+**Current Status:** All 3 functions deployed and redeployed Oct 31, 2025
+
+**API Keys (Updated Oct 31, 2025):**
+- **Platform-managed:** Edge Functions automatically receive `SUPABASE_SERVICE_ROLE_KEY` from Supabase platform
+- **No manual secrets required:** Functions use `Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')` which is auto-updated when keys rotate
+- **Current JWT:** `iat: 1758059308` (issued Oct 31, 2025, 9:00am EDT)
+- **Secret key created:** `srv_edge_functions_2025_10` (`sb_secret_RetZFiENHwc2DT9j_FRU8Q__zJALaB`) - reserved for future PostgREST/Storage/RPC use
+- **Key limitation:** `sb_secret_...` keys do NOT work for Auth Admin endpoints; use `service_role` JWT for admin operations
 
 **Security Note (Migration 0006):** Webhook uses `update_subscription_status()` RPC to bypass RLS when updating billing fields. Direct UPDATE revoked from authenticated users to prevent fraud.
+
+**Key Rotation History:**
+- Oct 11, 2025: Initial JWT keys issued (`iat: 1728697830`)
+- Oct 31, 2025: JWT signing secret rotated after service_role key exposure (`iat: 1758059308`)
+- Next rotation: Pre-launch (before first paying customer)
 
 ---
 
