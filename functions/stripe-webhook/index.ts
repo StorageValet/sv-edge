@@ -139,14 +139,21 @@ async function handleCheckoutCompleted(
     userId = newUser.user.id
   }
 
+  // Determine if this is a setup fee payment or subscription signup
+  // Setup fee payments have mode='payment', subscription signups have mode='subscription'
+  const isSetupFee = session.mode === 'payment' || session.metadata?.product_type === 'setup_fee'
+  const subscriptionId = session.subscription as string | null
+
   // Upsert customer_profile
   const { error: profileError } = await supabase.from('customer_profile').upsert(
     {
       user_id: userId,
       email,
       stripe_customer_id: stripeCustomerId,
-      subscription_status: 'active',
-      subscription_id: session.subscription as string,
+      // Setup fee: inactive (subscription started manually later)
+      // Subscription: active (subscription created immediately)
+      subscription_status: isSetupFee ? 'inactive' : 'active',
+      subscription_id: subscriptionId,
     },
     { onConflict: 'user_id' }
   )
