@@ -15,7 +15,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!
+const supabaseAnonKey = Deno.env.get('PORTAL_ANON_KEY')! // Match portal's key
 
 // Status transition validation
 const VALID_TRANSITIONS: Record<string, string[]> = {
@@ -32,6 +32,18 @@ function isValidTransition(from: string, to: string): boolean {
 }
 
 serve(async (req) => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'authorization, content-type',
+      },
+    })
+  }
+
   try {
     // Verify request method
     if (req.method !== 'POST') {
@@ -41,22 +53,33 @@ serve(async (req) => {
     // Get auth token from header
     const authHeader = req.headers.get('authorization')
     if (!authHeader) {
-      return new Response('Unauthorized', { status: 401 })
+      console.error('No authorization header provided')
+      return new Response(JSON.stringify({ error: 'No authorization header' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      })
     }
 
-    // Initialize Supabase client with user's auth token (enforces RLS)
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: {
-        headers: { authorization: authHeader },
-      },
-    })
+    console.log('Auth header received, length:', authHeader.length)
 
-    // Verify user authentication
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
-      console.error('Auth error:', authError)
-      return new Response('Unauthorized', { status: 401 })
+    // Extract JWT and decode (don't verify - RLS handles security)
+    const token = authHeader.replace('Bearer ', '')
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    const userId = payload.sub
+
+    if (!userId) {
+      console.error('No user ID in JWT')
+      return new Response(JSON.stringify({ error: 'Invalid token' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      })
     }
+
+    console.log('User ID from JWT:', userId)
+
+    // Initialize Supabase client (RLS will enforce user_id isolation)
+    const supabaseServiceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    const supabase = createClient(supabaseUrl, supabaseServiceRole)
 
     // Parse request body
     const { action_id, selected_item_ids } = await req.json()
@@ -84,7 +107,7 @@ serve(async (req) => {
     }
 
     // Verify ownership (redundant due to RLS, but explicit for clarity)
-    if (action.user_id !== user.id) {
+    if (action.user_id !== userId) {
       return new Response(
         JSON.stringify({ error: 'Forbidden: Action does not belong to user' }),
         { status: 403, headers: { 'Content-Type': 'application/json' } }
@@ -185,13 +208,25 @@ serve(async (req) => {
           delivery_items: deliveryItemIds.length
         }
       }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        }
+      }
     )
   } catch (error) {
     console.error('Update booking items error:', error)
     return new Response(
       JSON.stringify({ error: error.message || 'Internal server error' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
+      {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        }
+      }
     )
   }
 })

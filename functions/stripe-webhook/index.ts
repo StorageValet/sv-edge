@@ -3,76 +3,22 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import Stripe from 'https://esm.sh/stripe@13.17.0?target=deno'
+import Stripe from 'npm:stripe@17'
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
   apiVersion: '2023-10-16',
-  httpClient: Stripe.createFetchHttpClient(),
 })
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const webhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET')!
 
-// ===============================
-// SERVICE AREA ZIP CONFIG (SV v1)
-// ===============================
-//
-// Primary launch zone (INITIAL):
-// - Hoboken
-// - Weehawken (Port Imperial corridor)
-// - Edgewater
-// - West New York (Port Imperial north overlap)
-// - Jersey City (all standard non-PO-box ZIPs)
-//
-// IMPORTANT BUSINESS RULES:
-//
-// 1) This is a **PRIMARY SERVICE AREA**, not an absolute denylist.
-//    - If ZIP is inside this list:
-//         out_of_service_area = false
-//         needs_manual_refund = false
-//
-//    - If ZIP is NOT in this list:
-//         out_of_service_area = true
-//         needs_manual_refund = true
-//
-//    This is a **soft gate** for ops review / special handling,
-//    NOT an automatic rejection of the customer.
-//
-// 2) Zach can expand this list at any time by adding ZIP strings
-//    to SERVICE_AREA_ZIPS and redeploying this edge function.
-//    No DB migrations required.
-
+// Service area ZIP codes (Hoboken, Weehawken, Edgewater, Jersey City)
 const SERVICE_AREA_ZIPS = [
-  // Hoboken
-  '07030',
-
-  // Weehawken (Port Imperial)
-  '07086',
-
-  // Edgewater
-  '07020',
-
-  // West New York (Port Imperial overlap)
-  '07093',
-
-  // Jersey City (full coverage for launch)
-  '07302',
-  '07303',
-  '07304',
-  '07305',
-  '07306',
-  '07307',
-  '07308',
-  '07310',
-  '07311'
+  '07030', '07086', '07020', '07087', '07093',
+  '07302', '07303', '07304', '07305', '07306',
+  '07307', '07308', '07310', '07311'
 ]
-
-// Helper: centralized service area check
-function isInServiceArea(zip: string | null | undefined): boolean {
-  if (!zip) return false
-  return SERVICE_AREA_ZIPS.includes(zip.trim())
-}
 
 serve(async (req) => {
   try {
@@ -177,29 +123,6 @@ async function handleCheckoutCompleted(
     return
   }
 
-  // Extract customer details from session
-  const name = session.customer_details?.name || null
-  const address = session.customer_details?.address
-
-  // Build delivery_address object from Stripe address fields
-  const deliveryAddress = address ? {
-    street: address.line1 || '',
-    unit: address.line2 || null,
-    city: address.city || '',
-    state: address.state || '',
-    zip: address.postal_code || ''
-  } : null
-
-  // Extract ZIP for service area validation
-  const zip = address?.postal_code || null
-  const inServiceArea = isInServiceArea(zip)
-
-  // Set flags based on service area check (soft gate, not hard rejection)
-  const outOfServiceArea = !inServiceArea
-  const needsManualRefund = !inServiceArea
-
-  console.log(`Address validation: ZIP=${zip}, inServiceArea=${inServiceArea}, outOfServiceArea=${outOfServiceArea}`)
-
   // Create or get Auth user via Admin API (auto-confirm)
   const { data: existingUser } = await supabase.auth.admin.getUserByEmail(email)
 
@@ -227,7 +150,26 @@ async function handleCheckoutCompleted(
   const isSetupFee = session.mode === 'payment' || session.metadata?.product_type === 'setup_fee'
   const subscriptionId = session.subscription as string | null
 
-  // Upsert customer_profile with address and service area flags
+  // Extract and validate service area (soft gate - don't block checkout)
+  const address = session.customer_details?.address
+  const postalCode = address?.postal_code?.replace(/\s/g, '') // Remove spaces
+
+  // Check if customer is in service area
+  const inServiceArea = postalCode ? SERVICE_AREA_ZIPS.includes(postalCode) : false
+  const outOfServiceArea = !inServiceArea
+  const needsManualRefund = outOfServiceArea
+
+  // Build delivery address object
+  const deliveryAddress = address ? {
+    line1: address.line1,
+    line2: address.line2 || null,
+    city: address.city,
+    state: address.state,
+    zip: postalCode,
+    country: address.country
+  } : null
+
+  // Upsert customer_profile
   const { error: profileError } = await supabase.from('customer_profile').upsert(
     {
       user_id: userId,
@@ -237,10 +179,8 @@ async function handleCheckoutCompleted(
       // Subscription: active (subscription created immediately)
       subscription_status: isSetupFee ? 'inactive' : 'active',
       subscription_id: subscriptionId,
-      // Add customer details and address
-      full_name: name,
+      // Service area validation (soft gate)
       delivery_address: deliveryAddress,
-      // Service area flags (soft gate for ops review)
       out_of_service_area: outOfServiceArea,
       needs_manual_refund: needsManualRefund,
     },
@@ -276,7 +216,7 @@ async function handleCheckoutCompleted(
     // Non-blocking: customer can request new link via /login
   }
 
-  console.log(`Checkout completed for ${email} (user_id: ${userId})`)
+  console.log(`Checkout completed for ${email} (user_id: ${userId}, ZIP: ${postalCode || 'none'}, in_service_area: ${inServiceArea})`)
 }
 
 // Handle subscription created/updated

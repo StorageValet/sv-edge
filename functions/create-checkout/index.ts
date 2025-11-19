@@ -3,11 +3,10 @@
 // NOTE: $299/month subscription is started MANUALLY 5-7 days after signup or at first pickup
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import Stripe from 'https://esm.sh/stripe@13.17.0?target=deno'
+import Stripe from 'npm:stripe@17'
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
   apiVersion: '2023-10-16',
-  httpClient: Stripe.createFetchHttpClient(),
 })
 
 serve(async (req) => {
