@@ -87,7 +87,7 @@ serve(async (req) => {
     if (!action_id || !Array.isArray(selected_item_ids)) {
       return new Response(
         JSON.stringify({ error: 'Invalid request: action_id and selected_item_ids[] required' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
+        { status: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
       )
     }
 
@@ -102,7 +102,7 @@ serve(async (req) => {
       console.error('Action not found:', actionError)
       return new Response(
         JSON.stringify({ error: 'Action not found' }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } }
+        { status: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
       )
     }
 
@@ -110,7 +110,7 @@ serve(async (req) => {
     if (action.user_id !== userId) {
       return new Response(
         JSON.stringify({ error: 'Forbidden: Action does not belong to user' }),
-        { status: 403, headers: { 'Content-Type': 'application/json' } }
+        { status: 403, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
       )
     }
 
@@ -120,7 +120,7 @@ serve(async (req) => {
         JSON.stringify({
           error: `Cannot modify items: action status is '${action.status}' (expected 'pending_items' or 'pending_confirmation')`
         }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
+        { status: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
       )
     }
 
@@ -134,7 +134,7 @@ serve(async (req) => {
       console.error('Failed to fetch items:', itemsError)
       return new Response(
         JSON.stringify({ error: 'Failed to fetch items' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+        { status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
       )
     }
 
@@ -151,14 +151,16 @@ serve(async (req) => {
       // Items with status='in_transit' are ignored (shouldn't be selectable)
     }
 
-    // Validate transition to pending_confirmation
-    const newStatus = 'pending_confirmation'
-    if (!isValidTransition(action.status, newStatus)) {
+    // Determine new status - stay in pending_confirmation if already there
+    const newStatus = action.status === 'pending_confirmation' ? 'pending_confirmation' : 'pending_confirmation'
+
+    // Skip transition validation if staying in same status (editing items)
+    if (action.status !== newStatus && !isValidTransition(action.status, newStatus)) {
       return new Response(
         JSON.stringify({
           error: `Invalid status transition: ${action.status} → ${newStatus}`
         }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
+        { status: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
       )
     }
 
@@ -179,7 +181,7 @@ serve(async (req) => {
       console.error('Failed to update action:', updateError)
       return new Response(
         JSON.stringify({ error: 'Failed to update booking' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+        { status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
       )
     }
 
