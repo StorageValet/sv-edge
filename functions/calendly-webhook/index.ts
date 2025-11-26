@@ -82,9 +82,9 @@ serve(async (req) => {
 async function handleInviteeCreated(supabase: any, event: any) {
   const payload = event.payload
 
-  // Extract key fields from Calendly payload
-  // Calendly sends nested structure: payload.invitee.email, payload.scheduled_event.uri, etc.
-  const inviteeEmail = payload.invitee?.email
+  // Extract key fields from Calendly v2 API payload
+  // Email is at payload.email (not nested), times are in scheduled_event
+  const inviteeEmail = payload.email
   const eventUri = payload.scheduled_event?.uri  // Unique Calendly event URI
   const startTime = payload.scheduled_event?.start_time
   const endTime = payload.scheduled_event?.end_time
