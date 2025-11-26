@@ -1,8 +1,15 @@
-# Storage Valet Portal - Claude Code Context
+# sv-edge - Storage Valet Edge Functions
+**Last Updated:** 2025-11-24
+**Critical:** ALL functions must deploy with --no-verify-jwt flag
 
-**Last Updated:** Oct 28, 2025
-**Phase:** 1.0 (Feature Complete, Testing Pending)
-**Production Status:** 75% Ready (Infrastructure ✅, Code ✅, Testing ⏳)
+## 🔴 DEPLOYMENT WARNING
+```bash
+# NEVER deploy without the flag:
+supabase functions deploy [name] --no-verify-jwt
+
+# Or use the script that has correct flags:
+./deploy-and-test.sh
+```
 
 ---
 
