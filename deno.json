@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "functions": {
+    "calendly-webhook": {
+      "verify_jwt": false
+    },
+    "stripe-webhook": {
+      "verify_jwt": false
+    }
+  }
+}
