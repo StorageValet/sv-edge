@@ -83,10 +83,11 @@ async function handleInviteeCreated(supabase: any, event: any) {
   const payload = event.payload
 
   // Extract key fields from Calendly payload
-  const inviteeEmail = payload.email
-  const eventUri = payload.uri  // Unique Calendly event URI
-  const startTime = payload.start_time
-  const endTime = payload.end_time
+  // Calendly sends nested structure: payload.invitee.email, payload.scheduled_event.uri, etc.
+  const inviteeEmail = payload.invitee?.email
+  const eventUri = payload.scheduled_event?.uri  // Unique Calendly event URI
+  const startTime = payload.scheduled_event?.start_time
+  const endTime = payload.scheduled_event?.end_time
 
   if (!inviteeEmail || !eventUri || !startTime || !endTime) {
     console.error('Missing required fields in invitee.created payload', payload)
@@ -167,7 +168,8 @@ async function handleInviteeCreated(supabase: any, event: any) {
 // Handle invitee.canceled event
 async function handleInviteeCanceled(supabase: any, event: any) {
   const payload = event.payload
-  const eventUri = payload.event  // Calendly event URI
+  // Calendly sends scheduled_event.uri for cancellations too
+  const eventUri = payload.scheduled_event?.uri  // Calendly event URI
 
   if (!eventUri) {
     console.error('Missing event URI in invitee.canceled payload', payload)
