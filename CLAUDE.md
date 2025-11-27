@@ -1,5 +1,153 @@
+# 🚦 **READ FIRST — AI AGENT STARTUP RULES (SYSTEM PROTECTION BLOCK)**
+
+**Last Verified Stable Date:** **Nov 27, 2025**
+**Environment:** Production (Vercel + Supabase)
+**Status:** All systems healthy, repos clean, and fully deployed.
+
+This file defines the *authoritative truth* for this repository.
+All AI agents (Claude Code, ChatGPT, etc.) must follow these rules before making any assumptions, changes, or recommendations.
+
+---
+
+## ✅ **1. Treat the Repository as Clean and Stable**
+
+- Do **not** assume the repository is broken or corrupted.
+- Do **not** suggest rebuilding migrations, deleting directories, or recreating projects unless explicitly asked.
+- The codebase is **known-good**, deployed, tested, and stable as of the commit hashes listed below.
+
+---
+
+## ✅ **2. Handle Untracked or Modified Files Safely**
+
+If `git status` shows untracked files:
+
+- FIRST ask:
+  > "Is this intentional, or should I add it to .gitignore or remove it?"
+
+- If the user does *not* explicitly say "commit this,"
+  → add it to `.gitignore` or clean it up.
+- **Never assume new files indicate broken code.**
+- **Never remove or alter migrations automatically.**
+
+This prevents accidental deletion of business logic or schema history.
+
+---
+
+## ✅ **3. Calendly Integration: DO NOT MODIFY**
+
+The production Calendly → Supabase → Portal integration is **confirmed working** on `main`.
+
+- Do NOT suggest removing it.
+- Do NOT rebuild or redesign it.
+- Only modify Calendly logic when the user specifically requests new features or changes.
+
+---
+
+## ✅ **4. Item Status Logic: DO NOT REWRITE**
+
+The correct and intentional state machine is:
+
+```text
+home → scheduled → stored
+(stored → home on delivery completion)
+```
+
+And for editing:
+- Adding items → scheduled
+- Removing pickup items → home
+- Removing delivery items → stored
+
+This state model is correct.
+Do NOT change it unless explicitly asked.
+
+---
+
+## ✅ **5. Migrations Are Fully Applied**
+
+Supabase migrations are complete and in sync:
+- Latest db commit: `b9a0330`
+- All migrations have been applied.
+- There are no pending migration files.
+
+Do NOT generate, delete, reorder, or modify migrations unless the user explicitly asks for schema changes.
+
+---
+
+## ✅ **6. Branding Assets Are Correct and Final**
+
+- Header wordmark (600×80 PNG) integrated and sized appropriately.
+- Sign-in hero logo (1200×1200 PNG) integrated and tested.
+- SVG leftovers were removed intentionally.
+- Do NOT regenerate or downscale assets unless asked.
+
+---
+
+## ✅ **7. When Starting a New Session: Follow This Protocol**
+
+Before making ANY changes, run:
+
+```bash
+git status
+```
+
+Then follow these rules:
+1. If there are no changes → proceed normally.
+2. If there are changes, ask:
+   > "Should these be committed, ignored via .gitignore, or discarded?"
+3. Do NOT:
+   - Suggest that changes imply broken code
+   - Recommend removing migrations
+   - Recommend re-initializing repos
+   - Suggest that Calendly only works on a feature branch
+   - Propose rewrites without user instruction
+4. ALWAYS assume system integrity unless explicitly told otherwise.
+
+---
+
+## 🔐 **8. Last Known Good Commits**
+
+Record of last verified stable state:
+- **sv-portal/main:** `ed1d218`
+- **sv-db/main:** `b9a0330`
+- **sv-edge/main:** `5504ce0`
+
+All repos confirmed clean.
+Production portal returning 200 OK.
+All features verified functional.
+
+---
+
+## 🧭 **9. Instructions for Future Claude Code**
+
+If anything seems inconsistent:
+
+> "Pause. Ask Zach for confirmation before touching anything."
+
+- NEVER proactively rewrite or refactor critical systems.
+- NEVER assume corruption.
+- NEVER rebuild without explicit direction.
+
+---
+
+## 🎯 **Purpose of This Block**
+
+This block ensures:
+- Clean session handoffs
+- Zero false alarms
+- Zero unnecessary rebuilds
+- Zero "feature-branch panic"
+- A predictable, stable developer experience for Zach and Storage Valet
+
+---
+
+✔️ **End of Protection Block**
+
+(Session-specific notes below this line.)
+
+---
+
 # sv-edge - Storage Valet Edge Functions
-**Last Updated:** 2025-11-24
+**Last Updated:** 2025-11-27
 **Critical:** ALL functions must deploy with --no-verify-jwt flag
 
 ## 🔴 DEPLOYMENT WARNING
