@@ -50,8 +50,10 @@ serve(async (req) => {
       return new Response('Method not allowed', { status: 405 })
     }
 
-    // Get auth token from header
-    const authHeader = req.headers.get('authorization')
+    // Get auth token from header (case-insensitive)
+    const authHeader =
+      req.headers.get('authorization') ??
+      req.headers.get('Authorization')
     if (!authHeader) {
       console.error('No authorization header provided')
       return new Response(JSON.stringify({ error: 'No authorization header' }), {
@@ -63,9 +65,18 @@ serve(async (req) => {
     console.log('Auth header received, length:', authHeader.length)
 
     // Extract JWT and decode (don't verify - RLS handles security)
-    const token = authHeader.replace('Bearer ', '')
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    const userId = payload.sub
+    let userId: string
+    try {
+      const token = authHeader.replace('Bearer ', '')
+      const payload = JSON.parse(atob(token.split('.')[1] ?? ''))
+      userId = payload.sub
+    } catch {
+      console.error('Failed to decode JWT')
+      return new Response(JSON.stringify({ error: 'Invalid or malformed JWT' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      })
+    }
 
     if (!userId) {
       console.error('No user ID in JWT')

@@ -21,8 +21,10 @@ serve(async (req) => {
   }
 
   try {
-    // Require staff authorization
-    const authHeader = req.headers.get('authorization')
+    // Require staff authorization (case-insensitive header)
+    const authHeader =
+      req.headers.get('authorization') ??
+      req.headers.get('Authorization')
     if (!authHeader) {
       return new Response(JSON.stringify({ error: 'Authorization required' }), {
         status: 401,
@@ -30,7 +32,37 @@ serve(async (req) => {
       })
     }
 
+    // Decode JWT to get user_id
+    let userId: string
+    try {
+      const token = authHeader.replace('Bearer ', '')
+      const payload = JSON.parse(atob(token.split('.')[1] ?? ''))
+      userId = payload.sub
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid or malformed JWT' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      })
+    }
+
+    if (!userId) {
+      return new Response(JSON.stringify({ error: 'Invalid token' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      })
+    }
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
+
+    // Verify staff authorization via sv.is_staff()
+    const { data: isStaff, error: staffErr } = await supabase.rpc('is_staff')
+    if (staffErr || !isStaff) {
+      console.error('Staff check failed:', staffErr?.message || 'User is not staff')
+      return new Response(JSON.stringify({ error: 'Forbidden: staff only' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      })
+    }
 
     // Parse request
     let body: any
