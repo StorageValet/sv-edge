@@ -3,7 +3,6 @@
 *.log
 node_modules/
 .vercel
-supabase/functions/
 
 # System files
 .DS_Store

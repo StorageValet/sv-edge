@@ -91,10 +91,10 @@ serve(async (req) => {
       )
     }
 
-    // Fetch action and verify ownership
+    // Fetch action and verify ownership (include existing item arrays for edit mode)
     const { data: action, error: actionError } = await supabase
       .from('actions')
-      .select('id, user_id, status')
+      .select('id, user_id, status, pickup_item_ids, delivery_item_ids')
       .eq('id', action_id)
       .single()
 
@@ -138,17 +138,33 @@ serve(async (req) => {
       )
     }
 
-    // Partition items by status: home → pickup, stored → delivery
+    // ═══════════════════════════════════════════════════════════════════════
+    // PARTITION ITEMS: home → pickup, stored → delivery
+    // For 'scheduled' items, use the booking's existing arrays to determine type
+    // ═══════════════════════════════════════════════════════════════════════
+    const prevPickupIds = new Set<string>(action.pickup_item_ids || [])
+    const prevDeliveryIds = new Set<string>(action.delivery_item_ids || [])
+
     const pickupItemIds: string[] = []
     const deliveryItemIds: string[] = []
 
     for (const item of items) {
       if (item.status === 'home') {
+        // Unscheduled home item → pickup
         pickupItemIds.push(item.id)
       } else if (item.status === 'stored') {
+        // Unscheduled stored item → delivery
         deliveryItemIds.push(item.id)
+      } else if (item.status === 'scheduled') {
+        // Scheduled item: use booking's existing arrays to determine original type
+        if (prevPickupIds.has(item.id)) {
+          pickupItemIds.push(item.id)
+        } else if (prevDeliveryIds.has(item.id)) {
+          deliveryItemIds.push(item.id)
+        }
+        // If not in either (shouldn't happen), ignore it
       }
-      // Items with status='in_transit' are ignored (shouldn't be selectable)
+      // Other statuses are ignored
     }
 
     // Determine new status - stay in pending_confirmation if already there
@@ -185,15 +201,92 @@ serve(async (req) => {
       )
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // UPDATE ITEM STATUSES (additions AND removals)
+    // ═══════════════════════════════════════════════════════════════════════
+    const nextPickupIds = new Set(pickupItemIds)
+    const nextDeliveryIds = new Set(deliveryItemIds)
+
+    // Compute added items (new to this booking)
+    const addedPickupIds = pickupItemIds.filter(id => !prevPickupIds.has(id))
+    const addedDeliveryIds = deliveryItemIds.filter(id => !prevDeliveryIds.has(id))
+    const addedIds = [...addedPickupIds, ...addedDeliveryIds]
+
+    // Compute removed items (were on booking, now unchecked)
+    const removedPickupIds = [...prevPickupIds].filter(id => !nextPickupIds.has(id))
+    const removedDeliveryIds = [...prevDeliveryIds].filter(id => !nextDeliveryIds.has(id))
+
+    console.log(`Item changes: +${addedIds.length} added, -${removedPickupIds.length} pickup removed, -${removedDeliveryIds.length} delivery removed`)
+
+    // Set added items to 'scheduled'
+    if (addedIds.length > 0) {
+      const { error: addError } = await supabase
+        .from('items')
+        .update({ status: 'scheduled', updated_at: new Date().toISOString() })
+        .in('id', addedIds)
+
+      if (addError) {
+        console.error('Failed to set added items to scheduled:', addError)
+      } else {
+        console.log(`Set ${addedIds.length} items to status 'scheduled'`)
+      }
+    }
+
+    // Set removed pickup items back to 'home'
+    if (removedPickupIds.length > 0) {
+      const { error: removePickupError } = await supabase
+        .from('items')
+        .update({ status: 'home', updated_at: new Date().toISOString() })
+        .in('id', removedPickupIds)
+
+      if (removePickupError) {
+        console.error('Failed to set removed pickup items to home:', removePickupError)
+      } else {
+        console.log(`Set ${removedPickupIds.length} removed pickup items to status 'home'`)
+      }
+    }
+
+    // Set removed delivery items back to 'stored'
+    if (removedDeliveryIds.length > 0) {
+      const { error: removeDeliveryError } = await supabase
+        .from('items')
+        .update({ status: 'stored', updated_at: new Date().toISOString() })
+        .in('id', removedDeliveryIds)
+
+      if (removeDeliveryError) {
+        console.error('Failed to set removed delivery items to stored:', removeDeliveryError)
+      } else {
+        console.log(`Set ${removedDeliveryIds.length} removed delivery items to status 'stored'`)
+      }
+    }
+
+    // TODO: SERVICE COMPLETION FLOW
+    // ═══════════════════════════════════════════════════════════════════════
+    // When a service is marked as completed (by driver/ops):
+    //
+    // For PICKUP completions:
+    //   UPDATE items SET status = 'stored' WHERE id = ANY(pickup_item_ids)
+    //
+    // For DELIVERY completions:
+    //   UPDATE items SET status = 'home' WHERE id = ANY(delivery_item_ids)
+    //
+    // This logic should be added to:
+    // - A new edge function (e.g., complete-service) OR
+    // - The Supabase dashboard/admin panel when ops confirms completion
+    // ═══════════════════════════════════════════════════════════════════════
+
     // Log event (using service role client to bypass RLS)
     const supabaseService = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
     await supabaseService.rpc('log_booking_event', {
       p_action_id: action_id,
-      p_event_type: 'items_added',
+      p_event_type: 'items_updated',
       p_metadata: {
         pickup_count: pickupItemIds.length,
         delivery_count: deliveryItemIds.length,
         total_items: selected_item_ids.length,
+        added_count: addedIds.length,
+        removed_pickup_count: removedPickupIds.length,
+        removed_delivery_count: removedDeliveryIds.length,
         previous_status: action.status,
         new_status: newStatus
       }

@@ -23,7 +23,15 @@ serve(async (req) => {
 
   try {
     // Parse request body (optional: referral_code, promo_code, email)
-    const body = await req.json().catch(() => ({}))
+    let body: any
+    try {
+      body = await req.json()
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      })
+    }
 
     const {
       email = '',
@@ -32,9 +40,9 @@ serve(async (req) => {
     } = body
 
     // Get Stripe Price ID for $99 one-time setup fee
-    const setupFeepriceId = Deno.env.get('STRIPE_PRICE_SETUP_FEE') || 'price_1RzwGeCLlNQ5U3EWMtScwDcd'
+    const setupFeepriceId = Deno.env.get('STRIPE_PRICE_SETUP_FEE')
     if (!setupFeepriceId) {
-      throw new Error('STRIPE_PRICE_SETUP_FEE not configured')
+      throw new Error('STRIPE_PRICE_SETUP_FEE environment variable not configured')
     }
 
     // Build metadata for referral tracking
