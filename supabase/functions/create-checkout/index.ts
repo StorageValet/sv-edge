@@ -1,5 +1,5 @@
 // Storage Valet — Create Checkout Edge Function
-// v3.2 • Creates Stripe Checkout Session for $99 one-time setup fee
+// v3.3 • Always create Stripe customer (even for $0 promo checkouts)
 // NOTE: $299/month subscription is started MANUALLY 5-7 days after signup or at first pickup
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
@@ -55,7 +55,8 @@ serve(async (req) => {
 
     // Create Stripe Checkout Session for ONE-TIME PAYMENT (not subscription)
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
-      mode: 'payment', // Changed from 'subscription' to 'payment'
+      mode: 'payment',
+      customer_creation: 'always', // Ensure Stripe customer is created even for $0 promo checkouts
       line_items: [
         {
           price: setupFeepriceId,

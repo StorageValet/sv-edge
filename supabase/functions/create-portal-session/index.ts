@@ -1,5 +1,5 @@
 // Storage Valet — Create Portal Session Edge Function
-// v3.2 • Fixed: query customer_profile instead of billing.customers (PostgREST access)
+// v3.3 • Fixed: CORS headers on ALL responses (not just success)
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -30,7 +30,7 @@ serve(async (req) => {
     if (!authHeader) {
       return new Response(JSON.stringify({ error: 'Missing authorization header' }), {
         status: 401,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
       })
     }
 
@@ -45,7 +45,7 @@ serve(async (req) => {
     if (userError || !user) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
       })
     }
 
@@ -60,7 +60,7 @@ serve(async (req) => {
       console.error('Failed to lookup customer profile:', queryError)
       return new Response(
         JSON.stringify({ error: 'Failed to lookup customer profile' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+        { status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
       )
     }
 
@@ -70,7 +70,7 @@ serve(async (req) => {
         JSON.stringify({
           error: 'No billing account found. Billing portal is available after your first paid transaction.'
         }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } }
+        { status: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
       )
     }
 
@@ -98,7 +98,7 @@ serve(async (req) => {
       JSON.stringify({ error: error.message || 'Internal server error' }),
       {
         status: 500,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
       }
     )
   }
