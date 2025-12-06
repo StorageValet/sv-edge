@@ -1,5 +1,5 @@
 // Storage Valet — Stripe Webhook Edge Function
-// v3.3 • Handles $0 promo checkouts (no Stripe customer required)
+// v3.4 • Added detailed logging to debug 500 errors
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -141,14 +141,21 @@ async function handleCheckoutCompleted(
   }
 
   // Create or get Auth user via Admin API (auto-confirm)
-  const { data: existingUser } = await supabase.auth.admin.getUserByEmail(email)
+  const { data: existingUser, error: lookupError } = await supabase.auth.admin.getUserByEmail(email)
+
+  if (lookupError) {
+    console.error('Failed to lookup user:', lookupError)
+    // Don't throw - might just mean user doesn't exist
+  }
 
   let userId: string
 
   if (existingUser?.user) {
     userId = existingUser.user.id
+    console.log(`Found existing user for ${email}: ${userId}`)
   } else {
     // Create new Auth user (confirmed, no password)
+    console.log(`Creating new user for ${email}`)
     const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
       email,
       email_confirm: true, // Auto-confirm to enable magic links immediately
@@ -159,7 +166,13 @@ async function handleCheckoutCompleted(
       throw createError
     }
 
+    if (!newUser?.user?.id) {
+      console.error('User created but no ID returned')
+      throw new Error('User created but no ID returned')
+    }
+
     userId = newUser.user.id
+    console.log(`Created new user for ${email}: ${userId}`)
   }
 
   // Determine if this is a setup fee payment or subscription signup
@@ -187,6 +200,7 @@ async function handleCheckoutCompleted(
   } : null
 
   // Upsert customer_profile
+  console.log(`Upserting profile for ${email} (user_id: ${userId}, stripe_customer_id: ${stripeCustomerId || 'null'})`)
   const { error: profileError } = await supabase.from('customer_profile').upsert(
     {
       user_id: userId,
