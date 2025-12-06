@@ -1,5 +1,5 @@
 // Storage Valet — Create Portal Session Edge Function
-// v3.1 • Generates Stripe Hosted Customer Portal session URL
+// v3.2 • Fixed: query customer_profile instead of billing.customers (PostgREST access)
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -49,24 +49,36 @@ serve(async (req) => {
       })
     }
 
-    // Look up Stripe customer ID from billing.customers table
-    const billing = supabaseAdmin.schema('billing')
-    const { data, error: queryError } = await billing
-      .from('customers')
+    // Look up Stripe customer ID from customer_profile (public schema, accessible via PostgREST)
+    const { data: profile, error: queryError } = await supabaseAdmin
+      .from('customer_profile')
       .select('stripe_customer_id')
       .eq('user_id', user.id)
       .maybeSingle()
 
-    if (queryError || !data?.stripe_customer_id) {
+    if (queryError) {
+      console.error('Failed to lookup customer profile:', queryError)
       return new Response(
-        JSON.stringify({ error: 'No active subscription found' }),
+        JSON.stringify({ error: 'Failed to lookup customer profile' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      )
+    }
+
+    if (!profile?.stripe_customer_id) {
+      // This happens for $0 promo customers who haven't made a paid transaction yet
+      return new Response(
+        JSON.stringify({
+          error: 'No billing account found. Billing portal is available after your first paid transaction.'
+        }),
         { status: 404, headers: { 'Content-Type': 'application/json' } }
       )
     }
 
+    const stripeCustomerId = profile.stripe_customer_id
+
     // Create Stripe Customer Portal session
     const session = await stripe.billingPortal.sessions.create({
-      customer: data.stripe_customer_id,
+      customer: stripeCustomerId,
       return_url: `${Deno.env.get('APP_URL')}/account`,
     })
 
