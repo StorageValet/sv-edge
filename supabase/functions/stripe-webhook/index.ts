@@ -1,5 +1,5 @@
 // Storage Valet — Stripe Webhook Edge Function
-// v3.2 • Async verification + RPC-based idempotency (no PostgREST billing schema)
+// v3.3 • Handles $0 promo checkouts (no Stripe customer required)
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -127,11 +127,17 @@ async function handleCheckoutCompleted(
   session: Stripe.Checkout.Session
 ) {
   const email = session.customer_email || session.customer_details?.email
-  const stripeCustomerId = session.customer as string
+  const stripeCustomerId = session.customer as string | null
 
-  if (!email || !stripeCustomerId) {
-    console.error('Missing email or customer_id in checkout session')
+  // Email is required, but customer_id may be null for $0 promo checkouts
+  if (!email) {
+    console.error('Missing email in checkout session')
     return
+  }
+
+  // Log if this is a $0 promo checkout (no Stripe customer created)
+  if (!stripeCustomerId) {
+    console.log(`$0 promo checkout for ${email} - no Stripe customer created`)
   }
 
   // Create or get Auth user via Admin API (auto-confirm)
@@ -203,15 +209,17 @@ async function handleCheckoutCompleted(
     throw profileError
   }
 
-  // Upsert billing.customers via RPC (PostgREST doesn't expose billing schema)
-  const { error: billingError } = await supabase.rpc('upsert_billing_customer', {
-    p_user_id: userId,
-    p_stripe_customer_id: stripeCustomerId,
-  })
+  // Upsert billing.customers via RPC (only if we have a Stripe customer ID)
+  if (stripeCustomerId) {
+    const { error: billingError } = await supabase.rpc('upsert_billing_customer', {
+      p_user_id: userId,
+      p_stripe_customer_id: stripeCustomerId,
+    })
 
-  if (billingError) {
-    console.error('Failed to upsert billing.customers:', billingError)
-    // Non-blocking: customer_profile is the source of truth
+    if (billingError) {
+      console.error('Failed to upsert billing.customers:', billingError)
+      // Non-blocking: customer_profile is the source of truth
+    }
   }
 
   // Send magic link for first login
