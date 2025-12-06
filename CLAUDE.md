@@ -1,8 +1,11 @@
 # 🚦 **READ FIRST — AI AGENT STARTUP RULES (SYSTEM PROTECTION BLOCK)**
 
-**Last Verified Stable Date:** **Nov 27, 2025**
+**Last Verified Stable Date:** **Dec 6, 2025**
 **Environment:** Production (Vercel + Supabase)
 **Status:** All systems healthy, repos clean, and fully deployed.
+
+### Recent Critical Fix (Dec 6, 2025)
+**Stripe webhook was silently failing for 7 weeks** (Oct 13 - Dec 5). Root cause: Stripe SDK v17 requires async signature verification in Deno edge environments. Fixed in commit `3f09238`.
 
 This file defines the *authoritative truth* for this repository.
 All AI agents (Claude Code, ChatGPT, etc.) must follow these rules before making any assumptions, changes, or recommendations.
@@ -109,7 +112,7 @@ Then follow these rules:
 Record of last verified stable state:
 - **sv-portal/main:** `ed1d218`
 - **sv-db/main:** `b9a0330`
-- **sv-edge/main:** `5504ce0`
+- **sv-edge/main:** `3f09238` (Dec 6, 2025 - Stripe webhook fix)
 
 All repos confirmed clean.
 Production portal returning 200 OK.
@@ -117,7 +120,35 @@ All features verified functional.
 
 ---
 
-## 🧭 **9. Instructions for Future Claude Code**
+## ✅ **9. Stripe Webhook: Critical Knowledge**
+
+**Version:** v3.4 (deployed Dec 6, 2025)
+
+**Key Technical Requirements:**
+```typescript
+// Stripe SDK v17 in Deno requires async verification
+const cryptoProvider = Stripe.createSubtleCryptoProvider()
+event = await stripe.webhooks.constructEventAsync(body, sig, secret, undefined, cryptoProvider)
+```
+
+**$0 Promo Checkout Behavior:**
+- When `amount_total = 0` (100% discount), Stripe does NOT create a customer object
+- `session.customer` will be `null` - this is expected
+- Users are tracked in Supabase (auth.users + customer_profile), not Stripe
+- The webhook handles this gracefully - do NOT require `stripe_customer_id`
+
+**RPC Functions Created (billing schema not exposed via PostgREST):**
+- `public.insert_stripe_webhook_event()` - Idempotent event recording
+- `public.upsert_billing_customer()` - Billing customer upsert
+
+**DO NOT:**
+- Revert to sync `constructEvent()` - it will fail silently
+- Require `stripe_customer_id` for profile creation
+- Remove the `cryptoProvider` - it's required for edge environments
+
+---
+
+## 🧭 **10. Instructions for Future Claude Code**
 
 If anything seems inconsistent:
 
@@ -200,7 +231,7 @@ Storage Valet is a **pick-up-and-store service** for residential customers. This
 - **4 routes only:** `/login`, `/dashboard`, `/schedule`, `/account`
 - **Supabase backend only** (no Firebase, no custom API server)
 - **Stripe Hosted flows only** (no custom card UI, no Stripe Elements)
-- **Single pricing tier:** $299/month (setup fee $99, disabled by default)
+- **Single pricing tier:** $299/month (one-time setup fee $99, controlled via Stripe promotions)
 - **Magic links only** (no password auth)
 - **RLS on all tables** (zero cross-tenant access)
 - **Private storage bucket** (signed URLs with 1h expiry)
