@@ -9,15 +9,18 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
   apiVersion: '2023-10-16',
 })
 
+// Required for async webhook verification in Deno edge environment
+const cryptoProvider = Stripe.createSubtleCryptoProvider()
+
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const webhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET')!
 
-// Service area ZIP codes (Hoboken, Weehawken, Edgewater, Jersey City)
+// Service area ZIP codes (Hoboken, Weehawken, Edgewater, Jersey City, North Bergen)
 const SERVICE_AREA_ZIPS = [
   '07030', '07086', '07020', '07087', '07093',
   '07302', '07303', '07304', '07305', '07306',
-  '07307', '07308', '07310', '07311'
+  '07307', '07308', '07310', '07311', '07047'
 ]
 
 serve(async (req) => {
@@ -32,7 +35,14 @@ serve(async (req) => {
     let event: Stripe.Event
 
     try {
-      event = stripe.webhooks.constructEvent(body, signature, webhookSecret)
+      // Stripe SDK v17+ requires async verification in edge/Deno environments
+      event = await stripe.webhooks.constructEventAsync(
+        body,
+        signature,
+        webhookSecret,
+        undefined,  // tolerance (default 300s)
+        cryptoProvider
+      )
     } catch (err) {
       console.error('Webhook signature verification failed:', err.message)
       return new Response(`Webhook Error: ${err.message}`, { status: 400 })
