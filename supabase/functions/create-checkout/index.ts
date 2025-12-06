@@ -1,13 +1,17 @@
 // Storage Valet — Create Checkout Edge Function
-// v3.3 • Always create Stripe customer (even for $0 promo checkouts)
+// v3.4 • Reuse existing Stripe customer to avoid duplicates
 // NOTE: $299/month subscription is started MANUALLY 5-7 days after signup or at first pickup
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import Stripe from 'npm:stripe@17'
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
   apiVersion: '2023-10-16',
 })
+
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
 serve(async (req) => {
   // CORS preflight
@@ -39,6 +43,40 @@ serve(async (req) => {
       promo_code = '',
     } = body
 
+    // Check if authenticated user already has a Stripe customer ID
+    // Reuse existing Stripe customer if present to avoid duplicates.
+    // customer_creation: 'always' remains as a safety net for new customers.
+    let existingStripeCustomerId: string | null = null
+    const authHeader = req.headers.get('Authorization') || req.headers.get('authorization')
+
+    if (authHeader) {
+      try {
+        const token = authHeader.replace(/^Bearer\s+/i, '')
+        const supabase = createClient(supabaseUrl, supabaseServiceKey)
+        const { data: { user } } = await supabase.auth.getUser(token)
+
+        if (user) {
+          // Query customer_profile for existing stripe_customer_id
+          const { data: profile, error: profileError } = await supabase
+            .from('customer_profile')
+            .select('stripe_customer_id')
+            .eq('user_id', user.id)
+            .maybeSingle()
+
+          if (profileError) {
+            console.error('Failed to lookup existing customer:', profileError)
+            // Continue without existing customer - will create new one
+          } else if (profile?.stripe_customer_id) {
+            existingStripeCustomerId = profile.stripe_customer_id
+            console.log(`Reusing existing Stripe customer: ${existingStripeCustomerId}`)
+          }
+        }
+      } catch (authError) {
+        console.error('Auth lookup failed:', authError)
+        // Continue without existing customer - will create new one
+      }
+    }
+
     // Get Stripe Price ID for $99 one-time setup fee
     const setupFeepriceId = Deno.env.get('STRIPE_PRICE_SETUP_FEE')
     if (!setupFeepriceId) {
@@ -69,8 +107,11 @@ serve(async (req) => {
       allow_promotion_codes: true, // Enable promo codes in Stripe UI (can discount/waive setup fee)
     }
 
-    // Pre-fill email if provided (from Framer CTA form)
-    if (email) {
+    // Reuse existing Stripe customer if found, otherwise pre-fill email
+    if (existingStripeCustomerId) {
+      sessionParams.customer = existingStripeCustomerId
+      // Note: when customer is set, customer_email is ignored by Stripe
+    } else if (email) {
       sessionParams.customer_email = email
     }
 
