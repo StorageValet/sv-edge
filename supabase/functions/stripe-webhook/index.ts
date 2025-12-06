@@ -1,5 +1,5 @@
 // Storage Valet — Stripe Webhook Edge Function
-// v3.4 • Added detailed logging to debug 500 errors
+// v3.5 • Integrated with sv.pre_customers for data-first registration flow
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -80,7 +80,7 @@ serve(async (req) => {
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session
-        await handleCheckoutCompleted(supabase, session)
+        await handleCheckoutCompleted(supabase, session, event.id)
         break
       }
       case 'customer.subscription.created':
@@ -124,7 +124,8 @@ serve(async (req) => {
 // Handle checkout.session.completed
 async function handleCheckoutCompleted(
   supabase: any,
-  session: Stripe.Checkout.Session
+  session: Stripe.Checkout.Session,
+  eventId: string
 ) {
   const email = session.customer_email || session.customer_details?.email
   const stripeCustomerId = session.customer as string | null
@@ -135,13 +136,57 @@ async function handleCheckoutCompleted(
     return
   }
 
+  const normalizedEmail = email.toLowerCase().trim()
+
   // Log if this is a $0 promo checkout (no Stripe customer created)
   if (!stripeCustomerId) {
-    console.log(`$0 promo checkout for ${email} - no Stripe customer created`)
+    console.log(`$0 promo checkout for ${normalizedEmail} - no Stripe customer created`)
+  }
+
+  // === NEW: Check sv.pre_customers for registration data ===
+  interface PreCustomer {
+    id: string
+    email: string
+    first_name: string
+    last_name: string
+    phone: string | null
+    street_address: string | null
+    unit: string | null
+    city: string | null
+    state: string
+    zip_code: string
+    service_area_match: boolean
+    referral_source: string | null
+    converted_at: string | null
+    converted_user_id: string | null
+  }
+
+  let preCustomer: PreCustomer | null = null
+  const { data: preCustomerRows, error: preCustomerError } = await supabase.rpc(
+    'get_pre_customer_by_email',
+    { p_email: normalizedEmail }
+  )
+
+  if (preCustomerError) {
+    console.error('Failed to query pre_customers:', preCustomerError)
+    // Continue without pre_customer data
+  } else if (preCustomerRows && preCustomerRows.length > 0) {
+    preCustomer = preCustomerRows[0]
+    console.log(`Found pre_customer for ${normalizedEmail}: ${preCustomer.id}`)
+  } else {
+    // Log anomaly: checkout without pre-registration
+    console.log(`No pre_customer found for ${normalizedEmail} - logging anomaly`)
+    await supabase.rpc('log_signup_anomaly', {
+      p_email: normalizedEmail,
+      p_stripe_customer_id: stripeCustomerId,
+      p_anomaly_type: 'missing_pre_customer',
+      p_event_id: eventId,
+      p_raw_data: { session_id: session.id, mode: session.mode }
+    })
   }
 
   // Create or get Auth user via Admin API (auto-confirm)
-  const { data: existingUser, error: lookupError } = await supabase.auth.admin.getUserByEmail(email)
+  const { data: existingUser, error: lookupError } = await supabase.auth.admin.getUserByEmail(normalizedEmail)
 
   if (lookupError) {
     console.error('Failed to lookup user:', lookupError)
@@ -152,13 +197,20 @@ async function handleCheckoutCompleted(
 
   if (existingUser?.user) {
     userId = existingUser.user.id
-    console.log(`Found existing user for ${email}: ${userId}`)
+    console.log(`Found existing user for ${normalizedEmail}: ${userId}`)
   } else {
     // Create new Auth user (confirmed, no password)
-    console.log(`Creating new user for ${email}`)
+    // Include name from pre_customer if available
+    console.log(`Creating new user for ${normalizedEmail}`)
+    const userMetadata = preCustomer ? {
+      first_name: preCustomer.first_name,
+      last_name: preCustomer.last_name,
+    } : undefined
+
     const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
-      email,
+      email: normalizedEmail,
       email_confirm: true, // Auto-confirm to enable magic links immediately
+      user_metadata: userMetadata,
     })
 
     if (createError) {
@@ -172,7 +224,7 @@ async function handleCheckoutCompleted(
     }
 
     userId = newUser.user.id
-    console.log(`Created new user for ${email}: ${userId}`)
+    console.log(`Created new user for ${normalizedEmail}: ${userId}`)
   }
 
   // Determine if this is a setup fee payment or subscription signup
@@ -184,27 +236,39 @@ async function handleCheckoutCompleted(
   const address = session.customer_details?.address
   const postalCode = address?.postal_code?.replace(/\s/g, '') // Remove spaces
 
-  // Check if customer is in service area
-  const inServiceArea = postalCode ? SERVICE_AREA_ZIPS.includes(postalCode) : false
+  // Use pre_customer service area status if available, otherwise check Stripe address
+  const inServiceArea = preCustomer
+    ? preCustomer.service_area_match
+    : (postalCode ? SERVICE_AREA_ZIPS.includes(postalCode) : false)
   const outOfServiceArea = !inServiceArea
   const needsManualRefund = outOfServiceArea
 
-  // Build delivery address object
-  const deliveryAddress = address ? {
+  // Build delivery address - prefer pre_customer data if available
+  const deliveryAddress = preCustomer ? {
+    line1: preCustomer.street_address,
+    line2: preCustomer.unit || null,
+    city: preCustomer.city,
+    state: preCustomer.state,
+    zip: preCustomer.zip_code,
+    country: 'US'
+  } : (address ? {
     line1: address.line1,
     line2: address.line2 || null,
     city: address.city,
     state: address.state,
     zip: postalCode,
     country: address.country
-  } : null
+  } : null)
 
-  // Upsert customer_profile
-  console.log(`Upserting profile for ${email} (user_id: ${userId}, stripe_customer_id: ${stripeCustomerId || 'null'})`)
+  // Calculate setup fee amount from session (cents to dollars)
+  const setupFeeAmount = session.amount_total ? session.amount_total / 100 : 99.00
+
+  // Upsert customer_profile with pre_customer data if available
+  console.log(`Upserting profile for ${normalizedEmail} (user_id: ${userId}, stripe_customer_id: ${stripeCustomerId || 'null'})`)
   const { error: profileError } = await supabase.from('customer_profile').upsert(
     {
       user_id: userId,
-      email,
+      email: normalizedEmail,
       stripe_customer_id: stripeCustomerId,
       // Setup fee: inactive (subscription started manually later)
       // Subscription: active (subscription created immediately)
@@ -214,6 +278,13 @@ async function handleCheckoutCompleted(
       delivery_address: deliveryAddress,
       out_of_service_area: outOfServiceArea,
       needs_manual_refund: needsManualRefund,
+      // === NEW FIELDS from pre_customer ===
+      setup_fee_paid: true,
+      setup_fee_amount: setupFeeAmount,
+      first_name: preCustomer?.first_name || null,
+      last_name: preCustomer?.last_name || null,
+      full_name: preCustomer ? `${preCustomer.first_name} ${preCustomer.last_name}` : null,
+      phone: preCustomer?.phone || null,
     },
     { onConflict: 'user_id' }
   )
@@ -221,6 +292,21 @@ async function handleCheckoutCompleted(
   if (profileError) {
     console.error('Failed to upsert customer_profile:', profileError)
     throw profileError
+  }
+
+  // === NEW: Mark pre_customer as converted ===
+  if (preCustomer) {
+    const { error: convertError } = await supabase.rpc('mark_pre_customer_converted', {
+      p_pre_customer_id: preCustomer.id,
+      p_user_id: userId,
+    })
+
+    if (convertError) {
+      console.error('Failed to mark pre_customer as converted:', convertError)
+      // Non-blocking: profile is already created
+    } else {
+      console.log(`Pre-customer ${preCustomer.id} marked as converted`)
+    }
   }
 
   // Upsert billing.customers via RPC (only if we have a Stripe customer ID)
@@ -236,10 +322,10 @@ async function handleCheckoutCompleted(
     }
   }
 
-  // Send magic link for first login
+  // Send magic link for first login (deferred per plan - keeping existing behavior)
   const { error: magicLinkError } = await supabase.auth.admin.generateLink({
     type: 'magiclink',
-    email,
+    email: normalizedEmail,
     options: {
       redirectTo: `${Deno.env.get('APP_URL')}/dashboard`,
     },
@@ -250,7 +336,8 @@ async function handleCheckoutCompleted(
     // Non-blocking: customer can request new link via /login
   }
 
-  console.log(`Checkout completed for ${email} (user_id: ${userId}, ZIP: ${postalCode || 'none'}, in_service_area: ${inServiceArea})`)
+  const zipForLog = preCustomer?.zip_code || postalCode || 'none'
+  console.log(`Checkout completed for ${normalizedEmail} (user_id: ${userId}, ZIP: ${zipForLog}, in_service_area: ${inServiceArea}, setup_fee: $${setupFeeAmount})`)
 }
 
 // Handle subscription created/updated
