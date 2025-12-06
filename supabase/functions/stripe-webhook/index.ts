@@ -1,5 +1,5 @@
 // Storage Valet — Stripe Webhook Edge Function
-// v3.1 • Idempotent webhook handler with signature verification
+// v3.2 • Async verification + RPC-based idempotency (no PostgREST billing schema)
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -50,30 +50,31 @@ serve(async (req) => {
 
     // Initialize Supabase client with service role
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
-    const billing = supabase.schema('billing')
 
-    // IDEMPOTENCY CHECK: Insert event_id first (fails if duplicate)
-    const { error: insertError } = await billing
-      .from('webhook_events')
-      .insert({
-        event_id: event.id,
-        event_type: event.type,
-        payload: event,
-      })
-      .select()
-      .single()
+    // IDEMPOTENCY CHECK: Record event via RPC (returns 'duplicate' if already processed)
+    const { data: insertResult, error: insertError } = await supabase.rpc(
+      'insert_stripe_webhook_event',
+      {
+        p_event_id: event.id,
+        p_event_type: event.type,
+        p_payload: event,
+      }
+    )
 
     if (insertError) {
-      // Duplicate event (idempotency constraint violation)
-      if (insertError.code === '23505') {
-        console.log(`Duplicate event ${event.id}, skipping`)
-        return new Response(JSON.stringify({ ok: true, duplicate: true }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
+      console.error('Failed to record webhook event:', insertError)
       throw insertError
     }
+
+    if (insertResult === 'duplicate') {
+      console.log(`Duplicate event ${event.id}, skipping`)
+      return new Response(JSON.stringify({ ok: true, duplicate: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    console.log(`Webhook event ${event.id} recorded: ${insertResult}`)
 
     // Process event based on type
     switch (event.type) {
@@ -202,15 +203,16 @@ async function handleCheckoutCompleted(
     throw profileError
   }
 
-  // Upsert billing.customers (denormalized)
-  const billing = supabase.schema('billing')
-  await billing.from('customers').upsert(
-    {
-      user_id: userId,
-      stripe_customer_id: stripeCustomerId,
-    },
-    { onConflict: 'user_id' }
-  )
+  // Upsert billing.customers via RPC (PostgREST doesn't expose billing schema)
+  const { error: billingError } = await supabase.rpc('upsert_billing_customer', {
+    p_user_id: userId,
+    p_stripe_customer_id: stripeCustomerId,
+  })
+
+  if (billingError) {
+    console.error('Failed to upsert billing.customers:', billingError)
+    // Non-blocking: customer_profile is the source of truth
+  }
 
   // Send magic link for first login
   const { error: magicLinkError } = await supabase.auth.admin.generateLink({
