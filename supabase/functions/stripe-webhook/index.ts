@@ -1,5 +1,7 @@
 // Storage Valet — Stripe Webhook Edge Function
-// v3.5 • Integrated with sv.pre_customers for data-first registration flow
+// v3.8 • Removed unused generateLink call (Option A: user requests magic link from /login)
+// v3.7 • Fixed user lookup: use RPC function instead of non-existent getUserByEmail
+// v3.6 • Fixed idempotency: record event AFTER successful processing
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -51,30 +53,29 @@ serve(async (req) => {
     // Initialize Supabase client with service role
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-    // IDEMPOTENCY CHECK: Record event via RPC (returns 'duplicate' if already processed)
-    const { data: insertResult, error: insertError } = await supabase.rpc(
-      'insert_stripe_webhook_event',
-      {
-        p_event_id: event.id,
-        p_event_type: event.type,
-        p_payload: event,
-      }
+    // IDEMPOTENCY CHECK: Check if event was already SUCCESSFULLY processed
+    // NOTE: We check BEFORE processing, but only INSERT after SUCCESS
+    // This allows retries after failures while preventing duplicate processing
+    const { data: eventExists, error: checkError } = await supabase.rpc(
+      'check_stripe_webhook_event',
+      { p_event_id: event.id }
     )
 
-    if (insertError) {
-      console.error('Failed to record webhook event:', insertError)
-      throw insertError
+    // If check fails, log but continue (fail open for reliability)
+    if (checkError) {
+      console.error('Failed to check existing event:', checkError)
+      // Continue processing - better to risk duplicate than miss event
     }
 
-    if (insertResult === 'duplicate') {
-      console.log(`Duplicate event ${event.id}, skipping`)
+    if (eventExists === true) {
+      console.log(`Duplicate event ${event.id}, skipping (already processed)`)
       return new Response(JSON.stringify({ ok: true, duplicate: true }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
     }
 
-    console.log(`Webhook event ${event.id} recorded: ${insertResult}`)
+    console.log(`Processing webhook event ${event.id}: ${event.type}`)
 
     // Process event based on type
     switch (event.type) {
@@ -106,6 +107,24 @@ serve(async (req) => {
       }
       default:
         console.log(`Unhandled event type: ${event.type}`)
+    }
+
+    // RECORD EVENT: Only after successful processing
+    // This ensures retries work correctly if processing fails
+    const { error: insertError } = await supabase.rpc(
+      'insert_stripe_webhook_event',
+      {
+        p_event_id: event.id,
+        p_event_type: event.type,
+        p_payload: event,
+      }
+    )
+
+    if (insertError) {
+      // Log but don't fail - processing already succeeded
+      console.error('Failed to record webhook event (processing succeeded):', insertError)
+    } else {
+      console.log(`Webhook event ${event.id} recorded after successful processing`)
     }
 
     return new Response(JSON.stringify({ ok: true }), {
@@ -186,17 +205,22 @@ async function handleCheckoutCompleted(
   }
 
   // Create or get Auth user via Admin API (auto-confirm)
-  const { data: existingUser, error: lookupError } = await supabase.auth.admin.getUserByEmail(normalizedEmail)
+  // NOTE: Supabase JS v2 does NOT have getUserByEmail - use RPC function instead
+  console.log(`Looking up existing user for email: ${normalizedEmail}`)
+  const { data: existingUserId, error: lookupError } = await supabase.rpc(
+    'get_user_id_by_email',
+    { p_email: normalizedEmail }
+  )
 
   if (lookupError) {
-    console.error('Failed to lookup user:', lookupError)
-    // Don't throw - might just mean user doesn't exist
+    console.error('Failed to lookup user by email:', lookupError)
+    // Don't throw - we'll try to create the user
   }
 
   let userId: string
 
-  if (existingUser?.user) {
-    userId = existingUser.user.id
+  if (existingUserId) {
+    userId = existingUserId
     console.log(`Found existing user for ${normalizedEmail}: ${userId}`)
   } else {
     // Create new Auth user (confirmed, no password)
@@ -244,16 +268,17 @@ async function handleCheckoutCompleted(
   const needsManualRefund = outOfServiceArea
 
   // Build delivery address - prefer pre_customer data if available
+  // NOTE: Portal expects 'street' and 'unit', not 'line1' and 'line2'
   const deliveryAddress = preCustomer ? {
-    line1: preCustomer.street_address,
-    line2: preCustomer.unit || null,
+    street: preCustomer.street_address,
+    unit: preCustomer.unit || null,
     city: preCustomer.city,
     state: preCustomer.state,
     zip: preCustomer.zip_code,
     country: 'US'
   } : (address ? {
-    line1: address.line1,
-    line2: address.line2 || null,
+    street: address.line1,
+    unit: address.line2 || null,
     city: address.city,
     state: address.state,
     zip: postalCode,
@@ -322,19 +347,9 @@ async function handleCheckoutCompleted(
     }
   }
 
-  // Send magic link for first login (deferred per plan - keeping existing behavior)
-  const { error: magicLinkError } = await supabase.auth.admin.generateLink({
-    type: 'magiclink',
-    email: normalizedEmail,
-    options: {
-      redirectTo: `${Deno.env.get('APP_URL')}/dashboard`,
-    },
-  })
-
-  if (magicLinkError) {
-    console.error('Failed to send magic link:', magicLinkError)
-    // Non-blocking: customer can request new link via /login
-  }
+  // NOTE: Magic link email is handled by Supabase Auth when user requests it from /login
+  // We removed the generateLink call here since it generated a link but didn't use it
+  // For Option A (branded magic link), the email template is configured in Supabase Dashboard
 
   const zipForLog = preCustomer?.zip_code || postalCode || 'none'
   console.log(`Checkout completed for ${normalizedEmail} (user_id: ${userId}, ZIP: ${zipForLog}, in_service_area: ${inServiceArea}, setup_fee: $${setupFeeAmount})`)
