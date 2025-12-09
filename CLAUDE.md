@@ -1,10 +1,47 @@
 # 🚦 **READ FIRST — AI AGENT STARTUP RULES (SYSTEM PROTECTION BLOCK)**
 
-**Last Verified Stable Date:** **Dec 6, 2025**
+**Last Verified Stable Date:** **Dec 9, 2025**
 **Environment:** Production (Vercel + Supabase)
 **Status:** All systems healthy, repos clean, and fully deployed.
 
-### Recent Critical Fix (Dec 6, 2025)
+### Dec 9, 2025 Session (Evening) - SPEC-1 Dataflow Stabilization
+
+**stripe-webhook upgrades:**
+- **v3.6:** Fixed idempotency - record event AFTER processing (was recording before, causing retries to skip)
+- **v3.7:** Fixed user lookup - created `get_user_id_by_email` RPC (Supabase JS v2 has no `getUserByEmail`)
+- **v3.8:** Removed unused `generateLink` call (Option A: user requests magic link from /login)
+
+**Address field fix:** Changed `line1/line2` → `street/unit` to match portal expectations
+
+**New RPC function:** `public.get_user_id_by_email(p_email text)` - SECURITY DEFINER on auth.users
+
+**E2E Tests PASSED:**
+- zach+101: In-area ($49 with SAVE50) → Full data flow works
+- zach+102: In-area ($0 with SETUPFREE) → $0 checkout works
+
+**SPEC-1 Dataflow: STABILIZED ✅**
+```
+Framer Form → pre_customer → Stripe Checkout → stripe-webhook v3.8 → customer_profile → Portal
+```
+
+**Remaining TODO:** Brand Magic Link email template in Supabase Dashboard
+
+### Dec 9, 2025 Session (Morning) - Framer Registration Flow
+- **v2.0 reverted:** `framer-signup-webhook` re-deployed as v1.0 (no `checkout_url` in response)
+- **RegistrationForm.tsx:** Complete component created for Framer (GPT-5.1 approved)
+- **SAVE50 coupon:** Created in Stripe ($50 off, ID: `XyvAEDkJ`)
+- **E2E Tests:** All 4 scenarios PASSED
+  - In-area signup (07030) → `service_area_match: true`, pre_customer created
+  - Out-of-area (10001) → `service_area_match: false`, waitlist message
+  - Missing fields → 400 error with field list
+  - Invalid email → 400 error
+
+**Flow Architecture (v1.0):**
+1. Framer form → `framer-signup-webhook` (validates, saves pre_customer, returns service_area_match)
+2. If in-area → Component calls `create-checkout` → Stripe redirect
+3. If out-of-area → Component shows waitlist message
+
+### Dec 6, 2025 - Critical Stripe Webhook Fix
 **Stripe webhook was silently failing for 7 weeks** (Oct 13 - Dec 5). Root cause: Stripe SDK v17 requires async signature verification in Deno edge environments. Fixed in commit `3f09238`.
 
 This file defines the *authoritative truth* for this repository.
@@ -112,7 +149,7 @@ Then follow these rules:
 Record of last verified stable state:
 - **sv-portal/main:** `ed1d218`
 - **sv-db/main:** `b9a0330`
-- **sv-edge/main:** `3f09238` (Dec 6, 2025 - Stripe webhook fix)
+- **sv-edge/main:** `36ab484` (Dec 9, 2025 - stripe-webhook v3.8)
 
 All repos confirmed clean.
 Production portal returning 200 OK.
