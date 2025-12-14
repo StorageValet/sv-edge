@@ -1,8 +1,35 @@
 # 🚦 **READ FIRST — AI AGENT STARTUP RULES (SYSTEM PROTECTION BLOCK)**
 
-**Last Verified Stable Date:** **Dec 9, 2025**
+**Last Verified Stable Date:** **Dec 14, 2025**
 **Environment:** Production (Vercel + Supabase)
 **Status:** All systems healthy, repos clean, and fully deployed.
+
+### Dec 14, 2025 Session - Calendly Webhook Profile Auto-Creation
+
+**Changes shipped:**
+- **Email normalization:** `inviteeEmail = (payload.email || '').toLowerCase().trim()`
+- **Case-insensitive lookup:** Changed `.eq('email', ...)` to `.ilike('email', ...)`
+- **Profile auto-creation:** When auth user exists but no customer_profile, webhook now:
+  1. Calls `get_user_id_by_email` RPC to find auth user
+  2. UPSERTs minimal profile (user_id, email, subscription_status='inactive')
+  3. Creates action with null `service_address` (user adds later)
+
+**New booking_events logged:**
+- `calendly_profile_found` - existing profile matched
+- `calendly_profile_created` - new profile auto-created
+- `calendly_profile_create_failed` - upsert error (action still created)
+- `calendly_orphan_booking` - no auth user exists (unchanged behavior)
+
+**Commit:** `5ad2b05` - Calendly webhook: normalize email + auto-create customer profile when missing
+
+**Assumptions/Risks:**
+- Auto-created profiles have `subscription_status: 'inactive'` (user still needs to pay)
+- `service_address` will be null for auto-created profiles (user must add address in portal)
+- Relies on `get_user_id_by_email` RPC (SECURITY DEFINER, exists in prod)
+
+**Test:** Book via Calendly with email that has auth.users record but no customer_profile → should auto-create
+
+---
 
 ### Dec 9, 2025 Session (Evening) - SPEC-1 Dataflow Stabilization
 
@@ -147,9 +174,9 @@ Then follow these rules:
 ## 🔐 **8. Last Known Good Commits**
 
 Record of last verified stable state:
-- **sv-portal/main:** `ed1d218`
+- **sv-portal/main:** `e684e1b` (Dec 14, 2025 - Photo uploads, value optional, cover selection, insurance disclaimer)
 - **sv-db/main:** `b9a0330`
-- **sv-edge/main:** `36ab484` (Dec 9, 2025 - stripe-webhook v3.8)
+- **sv-edge/main:** `5ad2b05` (Dec 14, 2025 - Calendly webhook profile auto-creation)
 
 All repos confirmed clean.
 Production portal returning 200 OK.
