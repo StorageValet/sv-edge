@@ -96,7 +96,8 @@ async function handleInviteeCreated(supabase: any, event: any) {
 
   // Extract key fields from Calendly v2 API payload
   // Email is at payload.email (not nested), times are in scheduled_event
-  const inviteeEmail = payload.email
+  // Normalize email for case-insensitive matching
+  const inviteeEmail = (payload.email || '').toLowerCase().trim()
   const eventUri = payload.scheduled_event?.uri  // Unique Calendly event URI
   const startTime = payload.scheduled_event?.start_time
   const endTime = payload.scheduled_event?.end_time
@@ -126,33 +127,104 @@ async function handleInviteeCreated(supabase: any, event: any) {
     return
   }
 
-  // Lookup customer_profile by email
+  // Lookup customer_profile by email (case-insensitive via ILIKE)
   console.log(`Looking up customer_profile for email: "${inviteeEmail}"`)
   const { data: profile, error: profileError } = await supabase
     .from('customer_profile')
     .select('user_id, delivery_address, email')
-    .eq('email', inviteeEmail)
+    .ilike('email', inviteeEmail)
     .single()
 
-  if (profileError || !profile) {
-    console.error(`❌ No profile found for email: "${inviteeEmail}"`)
-    console.error('  - Profile error:', profileError)
-    // Log orphan event (customer hasn't signed up yet, or email mismatch)
+  let userId: string | null = null
+  let deliveryAddress: any = null
+
+  if (profile) {
+    // Profile found - use it
+    console.log(`✓ Found profile for email: "${inviteeEmail}"`)
+    console.log('  - user_id:', profile.user_id)
+    userId = profile.user_id
+    deliveryAddress = profile.delivery_address
+
+    // Log profile found event
     await supabase.rpc('log_booking_event', {
       p_action_id: null,
-      p_event_type: 'calendly_orphan_booking',
+      p_event_type: 'calendly_profile_found',
       p_metadata: {
         invitee_email: inviteeEmail,
-        event_uri: eventUri,
-        start_time: startTime,
-        end_time: endTime
+        user_id: userId
       }
     })
-    return
-  }
+  } else {
+    // No profile found - check if auth user exists
+    console.log(`⚠️ No profile found for email: "${inviteeEmail}"`)
+    console.log('  - Checking for auth user...')
 
-  console.log(`✓ Found profile for email: "${inviteeEmail}"`)
-  console.log('  - user_id:', profile.user_id)
+    // Use RPC to lookup auth user by email (get_user_id_by_email is SECURITY DEFINER)
+    const { data: authUserId, error: authLookupError } = await supabase
+      .rpc('get_user_id_by_email', { p_email: inviteeEmail })
+
+    if (authLookupError) {
+      console.error('  - Auth lookup error:', authLookupError)
+    }
+
+    if (authUserId) {
+      // Auth user exists but no profile - auto-create minimal profile
+      console.log(`✓ Auth user found: ${authUserId}`)
+      console.log('  - Auto-creating profile...')
+
+      const { error: upsertError } = await supabase
+        .from('customer_profile')
+        .upsert({
+          user_id: authUserId,
+          email: inviteeEmail,
+          subscription_status: 'inactive',  // Not paid yet
+        }, { onConflict: 'user_id' })
+
+      if (upsertError) {
+        console.error('❌ Failed to auto-create profile:', upsertError)
+        // Log error but continue - we still have the user_id
+        await supabase.rpc('log_booking_event', {
+          p_action_id: null,
+          p_event_type: 'calendly_profile_create_failed',
+          p_metadata: {
+            invitee_email: inviteeEmail,
+            user_id: authUserId,
+            error: upsertError.message
+          }
+        })
+      } else {
+        console.log('✓ Profile auto-created successfully')
+        // Log profile creation event
+        await supabase.rpc('log_booking_event', {
+          p_action_id: null,
+          p_event_type: 'calendly_profile_created',
+          p_metadata: {
+            invitee_email: inviteeEmail,
+            user_id: authUserId,
+            source: 'calendly_webhook_auto_create'
+          }
+        })
+      }
+
+      userId = authUserId
+      // deliveryAddress remains null - user needs to add it later
+    } else {
+      // No auth user exists - truly orphan booking
+      console.error(`❌ No auth user found for email: "${inviteeEmail}"`)
+      await supabase.rpc('log_booking_event', {
+        p_action_id: null,
+        p_event_type: 'calendly_orphan_booking',
+        p_metadata: {
+          invitee_email: inviteeEmail,
+          event_uri: eventUri,
+          start_time: startTime,
+          end_time: endTime,
+          reason: 'no_auth_user'
+        }
+      })
+      return
+    }
+  }
 
   // Upsert action (idempotent via calendly_event_uri unique constraint)
   console.log('Upserting action to database...')
@@ -160,13 +232,13 @@ async function handleInviteeCreated(supabase: any, event: any) {
     .from('actions')
     .upsert(
       {
-        user_id: profile.user_id,
+        user_id: userId,
         service_type: 'pickup',  // Default to pickup for schedule-first bookings
         calendly_event_uri: eventUri,
         scheduled_start: startTime,
         scheduled_end: endTime,
         status: 'pending_items',  // Awaiting item selection
-        service_address: profile.delivery_address,  // Snapshot address at booking time
+        service_address: deliveryAddress,  // Snapshot address at booking time (may be null for auto-created profiles)
         calendly_payload: payload,  // Store full payload for debugging
       },
       { onConflict: 'calendly_event_uri' }
