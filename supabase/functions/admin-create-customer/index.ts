@@ -1,5 +1,5 @@
 // Storage Valet — Admin Create Customer Edge Function
-// v1.0 • Manual customer account creation for admin/staff
+// v1.1 • Fixed staff schema reference (sv.staff not public.staff)
 // CTO Mandate: Server-side auth check required (not just UI gating)
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
@@ -67,20 +67,32 @@ serve(async (req) => {
     console.log(`Admin create customer request from user: ${caller.id}`)
 
     // SERVER-SIDE AUTH CHECK (CTO mandate - not just UI gating)
-    const { data: isAdmin, error: adminCheckError } = await supabaseAdmin
+    // CRITICAL: Staff table is in sv schema, not public
+    const { data: staffRecord, error: adminCheckError } = await supabaseAdmin
+      .schema('sv')
       .from('staff')
       .select('role')
       .eq('user_id', caller.id)
       .eq('role', 'admin')
-      .single()
+      .maybeSingle()
 
-    if (adminCheckError || !isAdmin) {
-      console.error('Admin check failed:', adminCheckError || 'Not admin')
+    if (adminCheckError) {
+      console.error('Admin check query failed:', adminCheckError)
+      return new Response(
+        JSON.stringify({ error: `Staff check failed: ${adminCheckError.message}` }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    if (!staffRecord) {
+      console.error('Admin check failed: User not in sv.staff or not admin role')
       return new Response(
         JSON.stringify({ error: 'Access denied: Admin role required' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
+
+    console.log(`Admin verified: ${caller.id} (role: ${staffRecord.role})`)
 
     // Parse request body
     const body: CreateCustomerRequest = await req.json()

@@ -1,5 +1,5 @@
 // Storage Valet — Complete Service Edge Function
-// v2.0 • Fixed staff authorization + status eligibility rules
+// v2.1 • Fixed staff schema reference (sv.staff not public.staff)
 // Marks pickup or delivery as completed and updates item statuses
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
@@ -52,14 +52,24 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
     // SERVER-SIDE STAFF CHECK (CTO mandate - not just UI gating)
+    // CRITICAL: Staff table is in sv schema, not public
     const { data: staffRecord, error: staffErr } = await supabase
+      .schema('sv')
       .from('staff')
       .select('role')
       .eq('user_id', caller.id)
-      .single()
+      .maybeSingle()
 
-    if (staffErr || !staffRecord) {
-      console.error('Staff check failed:', staffErr?.message || 'User not in staff table')
+    if (staffErr) {
+      console.error('Staff check query failed:', staffErr)
+      return new Response(JSON.stringify({ error: `Staff check failed: ${staffErr.message}` }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
+    if (!staffRecord) {
+      console.error('Staff check failed: User not in sv.staff table')
       return new Response(JSON.stringify({ error: 'Forbidden: staff only' }), {
         status: 403,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
