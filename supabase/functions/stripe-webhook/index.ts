@@ -1,4 +1,5 @@
 // Storage Valet — Stripe Webhook Edge Function
+// v3.10 • Made setup_fee_paid/setup_fee_amount conditional on isSetupFee (future-proof)
 // v3.9 • Fixed setup-fee payment timestamp: write last_payment_at using Stripe event time
 // v3.8 • Removed unused generateLink call (Option A: user requests magic link from /login)
 // v3.7 • Fixed user lookup: use RPC function instead of non-existent getUserByEmail
@@ -311,9 +312,8 @@ async function handleCheckoutCompleted(
       delivery_address: deliveryAddress,
       out_of_service_area: outOfServiceArea,
       needs_manual_refund: needsManualRefund,
-      // === NEW FIELDS from pre_customer ===
-      setup_fee_paid: true,
-      setup_fee_amount: setupFeeAmount,
+      // === Setup fee fields (only for mode='payment' checkouts) ===
+      ...(isSetupFee && { setup_fee_paid: true, setup_fee_amount: setupFeeAmount }),
       first_name: preCustomer?.first_name || null,
       last_name: preCustomer?.last_name || null,
       full_name: preCustomer ? `${preCustomer.first_name} ${preCustomer.last_name}` : null,
