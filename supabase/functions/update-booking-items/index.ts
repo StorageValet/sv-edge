@@ -1,4 +1,5 @@
 // Storage Valet — Update Booking Items Edge Function
+// v1.1 • Fixed: Proper JWT verification via auth.getUser() (was using insecure atob decode)
 // v1.0 • Item selection for schedule-first booking flow
 //
 // Accepts:
@@ -6,6 +7,7 @@
 // - selected_item_ids: Array of item UUIDs
 //
 // Logic:
+// - Verifies JWT via Supabase Auth (Pattern A: anon-key for auth, service role for DB)
 // - Verifies action ownership
 // - Fetches items and partitions by status (home vs stored)
 // - Updates pickup_item_ids and delivery_item_ids arrays
@@ -15,7 +17,8 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-const supabaseAnonKey = Deno.env.get('PORTAL_ANON_KEY')! // Match portal's key
+const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!
+const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
 // Status transition validation
 const VALID_TRANSITIONS: Record<string, string[]> = {
@@ -62,35 +65,39 @@ serve(async (req) => {
       })
     }
 
-    console.log('Auth header received, length:', authHeader.length)
-
-    // Extract JWT and decode (don't verify - RLS handles security)
-    let userId: string
-    try {
-      const token = authHeader.replace('Bearer ', '')
-      const payload = JSON.parse(atob(token.split('.')[1] ?? ''))
-      userId = payload.sub
-    } catch {
-      console.error('Failed to decode JWT')
-      return new Response(JSON.stringify({ error: 'Invalid or malformed JWT' }), {
-        status: 400,
+    const token = authHeader.replace(/^Bearer\s+/i, '')
+    if (!token) {
+      console.error('Empty token after stripping Bearer prefix')
+      return new Response(JSON.stringify({ error: 'No token provided' }), {
+        status: 401,
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
       })
     }
+    console.log('Auth token received, length:', token.length)
 
-    if (!userId) {
-      console.error('No user ID in JWT')
-      return new Response(JSON.stringify({ error: 'Invalid token' }), {
+    // ═══════════════════════════════════════════════════════════════════════
+    // PATTERN A: Verify JWT with anon-key client, use service role for DB writes
+    // This cryptographically verifies the JWT signature (unlike atob decode)
+    // ═══════════════════════════════════════════════════════════════════════
+    const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } }
+    })
+
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser()
+
+    if (authError || !user) {
+      console.error('Auth verification failed:', authError?.message || 'No user returned')
+      return new Response(JSON.stringify({ error: 'Invalid or expired token' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
       })
     }
 
-    console.log('User ID from JWT:', userId)
+    const userId = user.id
+    console.log('Verified user ID:', userId)
 
-    // Initialize Supabase client (RLS will enforce user_id isolation)
-    const supabaseServiceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    const supabase = createClient(supabaseUrl, supabaseServiceRole)
+    // Service role client for database writes (bypasses RLS, safe after auth verification)
+    const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
     // Parse request body
     const { action_id, selected_item_ids } = await req.json()
@@ -271,24 +278,8 @@ serve(async (req) => {
       }
     }
 
-    // TODO: SERVICE COMPLETION FLOW
-    // ═══════════════════════════════════════════════════════════════════════
-    // When a service is marked as completed (by driver/ops):
-    //
-    // For PICKUP completions:
-    //   UPDATE items SET status = 'stored' WHERE id = ANY(pickup_item_ids)
-    //
-    // For DELIVERY completions:
-    //   UPDATE items SET status = 'home' WHERE id = ANY(delivery_item_ids)
-    //
-    // This logic should be added to:
-    // - A new edge function (e.g., complete-service) OR
-    // - The Supabase dashboard/admin panel when ops confirms completion
-    // ═══════════════════════════════════════════════════════════════════════
-
     // Log event (using service role client to bypass RLS)
-    const supabaseService = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-    await supabaseService.rpc('log_booking_event', {
+    await supabase.rpc('log_booking_event', {
       p_action_id: action_id,
       p_event_type: 'items_updated',
       p_metadata: {
