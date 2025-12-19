@@ -1,4 +1,5 @@
 // Storage Valet — Stripe Webhook Edge Function
+// v3.9 • Fixed setup-fee payment timestamp: write last_payment_at using Stripe event time
 // v3.8 • Removed unused generateLink call (Option A: user requests magic link from /login)
 // v3.7 • Fixed user lookup: use RPC function instead of non-existent getUserByEmail
 // v3.6 • Fixed idempotency: record event AFTER successful processing
@@ -81,7 +82,7 @@ serve(async (req) => {
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session
-        await handleCheckoutCompleted(supabase, session, event.id)
+        await handleCheckoutCompleted(supabase, session, event.id, event.created)
         break
       }
       case 'customer.subscription.created':
@@ -144,7 +145,8 @@ serve(async (req) => {
 async function handleCheckoutCompleted(
   supabase: any,
   session: Stripe.Checkout.Session,
-  eventId: string
+  eventId: string,
+  eventCreatedAt: number  // Stripe timestamp (seconds since epoch)
 ) {
   const email = session.customer_email || session.customer_details?.email
   const stripeCustomerId = session.customer as string | null
@@ -288,6 +290,12 @@ async function handleCheckoutCompleted(
   // Calculate setup fee amount from session (cents to dollars)
   const setupFeeAmount = session.amount_total ? session.amount_total / 100 : 99.00
 
+  // Calculate payment timestamp from Stripe event time (only for setup-fee checkouts)
+  // Uses Stripe's event.created (seconds since epoch) for accurate payment time
+  const paymentTimestamp = isSetupFee
+    ? new Date(eventCreatedAt * 1000).toISOString()
+    : null
+
   // Upsert customer_profile with pre_customer data if available
   console.log(`Upserting profile for ${normalizedEmail} (user_id: ${userId}, stripe_customer_id: ${stripeCustomerId || 'null'})`)
   const { error: profileError } = await supabase.from('customer_profile').upsert(
@@ -310,6 +318,8 @@ async function handleCheckoutCompleted(
       last_name: preCustomer?.last_name || null,
       full_name: preCustomer ? `${preCustomer.first_name} ${preCustomer.last_name}` : null,
       phone: preCustomer?.phone || null,
+      // === v3.9: Payment timestamp for setup-fee checkouts ===
+      ...(paymentTimestamp && { last_payment_at: paymentTimestamp }),
     },
     { onConflict: 'user_id' }
   )
@@ -352,7 +362,7 @@ async function handleCheckoutCompleted(
   // For Option A (branded magic link), the email template is configured in Supabase Dashboard
 
   const zipForLog = preCustomer?.zip_code || postalCode || 'none'
-  console.log(`Checkout completed for ${normalizedEmail} (user_id: ${userId}, ZIP: ${zipForLog}, in_service_area: ${inServiceArea}, setup_fee: $${setupFeeAmount})`)
+  console.log(`Checkout completed for ${normalizedEmail} (user_id: ${userId}, ZIP: ${zipForLog}, in_service_area: ${inServiceArea}, setup_fee: $${setupFeeAmount}, last_payment_at: ${paymentTimestamp || 'null'})`)
 }
 
 // Handle subscription created/updated
