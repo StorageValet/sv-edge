@@ -54,14 +54,22 @@ function getEmailContent(type: EmailType, data: EmailRequest['data']): { subject
   <h2 style="color: #1d3557; margin-top: 32px;">What Happens Next</h2>
 
   <ol style="padding-left: 20px;">
-    <li style="margin-bottom: 12px;"><strong>Book your first pickup</strong> – Choose a time that works for you</li>
-    <li style="margin-bottom: 12px;"><strong>We come to you</strong> – Our team arrives with supplies and handles everything</li>
-    <li style="margin-bottom: 12px;"><strong>Your items are catalogued</strong> – Photos, descriptions, and $3,000 insurance coverage</li>
-    <li style="margin-bottom: 12px;"><strong>Access anytime</strong> – Request items back with 48-hour delivery</li>
+    <li style="margin-bottom: 16px;">
+      <strong>Create your inventory</strong> – Add items in your portal with names, descriptions, keywords, and photos. This makes it easy to find exactly what you need later—search "holiday decorations" and instantly locate your Christmas ornaments, tree, or wreath.
+    </li>
+    <li style="margin-bottom: 16px;">
+      <strong>Schedule your first pickup</strong> – Choose a time that works for you. We'll come to your home and collect your items.
+    </li>
+    <li style="margin-bottom: 16px;">
+      <strong>We store your items securely</strong> – Everything is protected by $3,000 insurance coverage and stored safely until you need it.
+    </li>
+    <li style="margin-bottom: 16px;">
+      <strong>Request delivery anytime</strong> – Select individual items or batch multiple items for redelivery. You can even swap items—get winter gear delivered while we pick up summer items in the same visit.
+    </li>
   </ol>
 
   <div style="text-align: center; margin: 32px 0;">
-    <a href="${PORTAL_URL}" style="background-color: #c56a47; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">Visit Your Portal</a>
+    <a href="${PORTAL_URL}" style="background-color: #c56a47; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">Create Your First Item</a>
   </div>
 
   <p style="margin-top: 32px;">Questions? Just reply to this email – we're here to help.</p>
