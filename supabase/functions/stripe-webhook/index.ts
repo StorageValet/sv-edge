@@ -1,4 +1,5 @@
 // Storage Valet — Stripe Webhook Edge Function
+// v3.11 • Added transactional email sending via Resend (welcome, payment_failed)
 // v3.10 • Made setup_fee_paid/setup_fee_amount conditional on isSetupFee (future-proof)
 // v3.9 • Fixed setup-fee payment timestamp: write last_payment_at using Stripe event time
 // v3.8 • Removed unused generateLink call (Option A: user requests magic link from /login)
@@ -26,6 +27,36 @@ const SERVICE_AREA_ZIPS = [
   '07302', '07303', '07304', '07305', '07306',
   '07307', '07308', '07310', '07311', '07047'
 ]
+
+// Send transactional email via send-email edge function (fire-and-forget)
+async function sendTransactionalEmail(
+  type: 'welcome' | 'pickup_complete' | 'delivery_complete' | 'payment_failed',
+  to: string,
+  data: { firstName?: string; itemCount?: number }
+) {
+  try {
+    const sendEmailUrl = `${supabaseUrl}/functions/v1/send-email`
+    const response = await fetch(sendEmailUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseServiceKey}`,
+      },
+      body: JSON.stringify({ type, to, data }),
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      console.error(`Failed to send ${type} email to ${to}:`, error)
+    } else {
+      const result = await response.json()
+      console.log(`Sent ${type} email to ${to} (id: ${result.id})`)
+    }
+  } catch (error) {
+    // Non-blocking: log but don't throw
+    console.error(`Error sending ${type} email to ${to}:`, error)
+  }
+}
 
 serve(async (req) => {
   try {
@@ -363,6 +394,11 @@ async function handleCheckoutCompleted(
 
   const zipForLog = preCustomer?.zip_code || postalCode || 'none'
   console.log(`Checkout completed for ${normalizedEmail} (user_id: ${userId}, ZIP: ${zipForLog}, in_service_area: ${inServiceArea}, setup_fee: $${setupFeeAmount}, last_payment_at: ${paymentTimestamp || 'null'})`)
+
+  // Send welcome email (non-blocking)
+  sendTransactionalEmail('welcome', normalizedEmail, {
+    firstName: preCustomer?.first_name || undefined,
+  })
 }
 
 // Handle subscription created/updated
@@ -461,7 +497,7 @@ async function handleInvoicePaymentFailed(supabase: any, invoice: Stripe.Invoice
 
   const { data: profile } = await supabase
     .from('customer_profile')
-    .select('user_id')
+    .select('user_id, email, first_name')
     .eq('stripe_customer_id', stripeCustomerId)
     .single()
 
@@ -483,4 +519,11 @@ async function handleInvoicePaymentFailed(supabase: any, invoice: Stripe.Invoice
   }
 
   console.log(`Invoice ${invoice.id} payment failed for user ${profile.user_id}`)
+
+  // Send payment failed email (non-blocking)
+  if (profile.email) {
+    sendTransactionalEmail('payment_failed', profile.email, {
+      firstName: profile.first_name || undefined,
+    })
+  }
 }

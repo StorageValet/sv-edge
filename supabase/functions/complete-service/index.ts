@@ -1,4 +1,5 @@
 // Storage Valet — Complete Service Edge Function
+// v2.2 • Added transactional email sending via Resend (pickup_complete, delivery_complete)
 // v2.1 • Fixed staff schema reference (sv.staff not public.staff)
 // Marks pickup or delivery as completed and updates item statuses
 
@@ -7,6 +8,36 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+
+// Send transactional email via send-email edge function (fire-and-forget)
+async function sendTransactionalEmail(
+  type: 'welcome' | 'pickup_complete' | 'delivery_complete' | 'payment_failed',
+  to: string,
+  data: { firstName?: string; itemCount?: number }
+) {
+  try {
+    const sendEmailUrl = `${supabaseUrl}/functions/v1/send-email`
+    const response = await fetch(sendEmailUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseServiceKey}`,
+      },
+      body: JSON.stringify({ type, to, data }),
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      console.error(`Failed to send ${type} email to ${to}:`, error)
+    } else {
+      const result = await response.json()
+      console.log(`Sent ${type} email to ${to} (id: ${result.id})`)
+    }
+  } catch (error) {
+    // Non-blocking: log but don't throw
+    console.error(`Error sending ${type} email to ${to}:`, error)
+  }
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -97,10 +128,10 @@ serve(async (req) => {
       })
     }
 
-    // Fetch action
+    // Fetch action (include user_id for email lookup)
     const { data: action, error: actionError } = await supabase
       .from('actions')
-      .select('id, status, service_type, pickup_item_ids, delivery_item_ids')
+      .select('id, user_id, status, service_type, pickup_item_ids, delivery_item_ids')
       .eq('id', action_id)
       .single()
 
@@ -190,6 +221,24 @@ serve(async (req) => {
     }).catch(err => console.error('Failed to log booking event:', err))
 
     console.log(`Service completed: ${action.service_type} for action ${action_id} (${itemsUpdated} items updated)`)
+
+    // Send service completion email (non-blocking)
+    // Look up customer profile for email and first_name
+    const { data: customerProfile } = await supabase
+      .from('customer_profile')
+      .select('email, first_name')
+      .eq('user_id', action.user_id)
+      .single()
+
+    if (customerProfile?.email) {
+      const emailType = action.service_type === 'pickup' ? 'pickup_complete' : 'delivery_complete'
+      sendTransactionalEmail(emailType, customerProfile.email, {
+        firstName: customerProfile.first_name || undefined,
+        itemCount: itemsUpdated,
+      })
+    } else {
+      console.log(`No customer email found for user ${action.user_id}, skipping service email`)
+    }
 
     return new Response(JSON.stringify({
       ok: true,
