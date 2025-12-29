@@ -47,7 +47,7 @@ function getEmailContent(type: EmailType, data: EmailRequest['data']): { subject
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #1d3557; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h1 style="color: #c56a47; margin-bottom: 24px;">Welcome to Storage Valet, ${firstName}!</h1>
+  <h1 style="color: #1d3557; margin-bottom: 24px;">Welcome to Storage Valet, ${firstName}!</h1>
 
   <p>You're officially part of Hudson County's premium pickup-and-store service. We're excited to help you reclaim your space!</p>
 
@@ -82,9 +82,9 @@ function getEmailContent(type: EmailType, data: EmailRequest['data']): { subject
 
     case 'pickup_complete':
       const itemCount = data.itemCount || 0
-      const itemText = itemCount === 1 ? '1 item' : `${itemCount} items`
+      const itemText = itemCount === 1 ? 'one of your items' : `${itemCount} of your items`
       return {
-        subject: 'Your Items Are Safely With Us!',
+        subject: 'Storage Valet Pickup Confirmation',
         html: `
 <!DOCTYPE html>
 <html>
@@ -93,23 +93,19 @@ function getEmailContent(type: EmailType, data: EmailRequest['data']): { subject
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #1d3557; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h1 style="color: #c56a47; margin-bottom: 24px;">We've Got Your Items!</h1>
+  <h1 style="color: #1d3557; margin-bottom: 24px;">Pickup Confirmation</h1>
 
-  <p>Great news, ${firstName}! We've successfully picked up <strong>${itemText}</strong> from your home. Your belongings are now safely stored and protected by $3,000 insurance coverage.</p>
+  <p>Hi ${firstName},</p>
 
-  <h2 style="color: #1d3557; margin-top: 32px;">What's in Your Portal</h2>
+  <p>Great news! We've successfully picked up ${itemText}. Rest assured, your belongings are safe and secure, each protected by your account's insurance coverage.</p>
 
-  <ul style="padding-left: 20px;">
-    <li style="margin-bottom: 8px;">Photos of each item</li>
-    <li style="margin-bottom: 8px;">Complete inventory list</li>
-    <li style="margin-bottom: 8px;">Request redelivery anytime</li>
-  </ul>
+  <p>You can schedule the delivery of these items or any others whenever you need them. Just a quick reminder: we kindly ask for a minimum of 48 hours' notice for pickups and deliveries. You can also schedule these events up to a year in advance, so feel free to plan ahead!</p>
 
   <div style="text-align: center; margin: 32px 0;">
     <a href="${PORTAL_URL}" style="background-color: #c56a47; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">View Your Inventory</a>
   </div>
 
-  <p style="margin-top: 32px;">Questions? Just reply to this email.</p>
+  <p>If you have any questions or need assistance, don't hesitate to contact support.</p>
 
   <p style="margin-top: 24px;">Warmly,<br>The Storage Valet Team</p>
 </body>
@@ -119,9 +115,9 @@ function getEmailContent(type: EmailType, data: EmailRequest['data']): { subject
 
     case 'delivery_complete':
       const deliveredCount = data.itemCount || 0
-      const deliveredText = deliveredCount === 1 ? '1 item' : `${deliveredCount} items`
+      const deliveredText = deliveredCount === 1 ? 'one of your items' : `${deliveredCount} of your items`
       return {
-        subject: 'Your Items Are Home!',
+        subject: 'Storage Valet Delivery Confirmation',
         html: `
 <!DOCTYPE html>
 <html>
@@ -130,19 +126,19 @@ function getEmailContent(type: EmailType, data: EmailRequest['data']): { subject
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #1d3557; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h1 style="color: #c56a47; margin-bottom: 24px;">Your Items Are Home!</h1>
+  <h1 style="color: #1d3557; margin-bottom: 24px;">Delivery Confirmation</h1>
 
-  <p>Great news, ${firstName}! We've successfully delivered <strong>${deliveredText}</strong> back to you.</p>
+  <p>Hi ${firstName},</p>
 
-  <h2 style="color: #1d3557; margin-top: 32px;">What's Next</h2>
+  <p>We've successfully delivered ${deliveredText} back to you.</p>
 
-  <p>Need to store more items? Book another pickup anytime through your portal.</p>
+  <p>If you need to schedule another pickup or delivery, you can do so anytime through your portal. As a reminder, we kindly ask for a minimum of 48 hours' notice, and you can schedule up to a year in advance.</p>
 
   <div style="text-align: center; margin: 32px 0;">
-    <a href="${PORTAL_URL}/schedule" style="background-color: #c56a47; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">Book a Pickup</a>
+    <a href="${PORTAL_URL}" style="background-color: #c56a47; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">Go to Your Portal</a>
   </div>
 
-  <p style="margin-top: 32px;">Questions? Just reply to this email.</p>
+  <p>If you have any questions or need assistance, don't hesitate to contact support.</p>
 
   <p style="margin-top: 24px;">Warmly,<br>The Storage Valet Team</p>
 </body>
@@ -161,7 +157,7 @@ function getEmailContent(type: EmailType, data: EmailRequest['data']): { subject
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #1d3557; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <h1 style="color: #c56a47; margin-bottom: 24px;">Action Needed: Payment Issue</h1>
+  <h1 style="color: #1d3557; margin-bottom: 24px;">Action Needed: Payment Issue</h1>
 
   <p>Hi ${firstName},</p>
 
