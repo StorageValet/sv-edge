@@ -299,7 +299,7 @@ Storage Valet is a **pick-up-and-store service** for residential customers. This
 - **Magic links only** (no password auth)
 - **RLS on all tables** (zero cross-tenant access)
 - **Private storage bucket** (signed URLs with 1h expiry)
-- **Webflow for marketing** (no portal functionality on marketing site)
+- **Framer for marketing** (no portal functionality on marketing site)
 - **Language: "as needed"** (never say "on-demand")
 
 **Flexible Guidelines (NOT Limits):**
@@ -379,7 +379,7 @@ Stripe-managed columns (`subscription_status`, `stripe_customer_id`, etc.) are *
 ## Stripe Integration
 
 ### Flows
-1. **Checkout:** Webflow CTA → Edge Function `create-checkout` → Stripe Hosted Checkout → Success
+1. **Checkout:** Framer CTA → Edge Function `create-checkout` → Stripe Hosted Checkout → Success
 2. **Portal:** Account page → Edge Function `create-portal-session` → Stripe Hosted Portal
 3. **Webhooks:** Stripe → Edge Function `stripe-webhook` → DB update (idempotent via `event_id`)
 
@@ -642,7 +642,7 @@ Stripe-managed columns (`subscription_status`, `stripe_customer_id`, etc.) are *
 
 - **Product Owner:** Zach Brown
 - **Implementation:** Claude Code (AI Assistant)
-- **Infrastructure:** Perplexity Agent (Webflow, DNS)
+- **Infrastructure:** Perplexity Agent (Framer, DNS)
 - **Documentation:** `~/code/sv-docs`
 
 ---

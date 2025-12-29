@@ -31,7 +31,7 @@ sv-edge/
 - `APP_URL`
 
 ### create-checkout
-**Trigger:** Webflow CTA (public, no auth required)
+**Trigger:** Framer CTA (public, no auth required)
 **Flow:**
 1. Accept optional `email`, `referral_code`, `promo_code` from request body
 2. Create Stripe Checkout Session for `STRIPE_PRICE_PREMIUM299`
