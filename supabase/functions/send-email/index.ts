@@ -1,4 +1,5 @@
 // Storage Valet — Send Email Edge Function
+// v1.1 • Added service role authentication (security fix)
 // v1.0 • Resend API integration for transactional emails
 // Triggered internally by stripe-webhook and complete-service
 
@@ -6,6 +7,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
 const RESEND_API_URL = 'https://api.resend.com/emails'
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 
 // Sender configuration (verified domain)
 const FROM_EMAIL = 'Storage Valet <concierge@mystoragevalet.com>'
@@ -16,6 +18,15 @@ const PORTAL_URL = 'https://portal.mystoragevalet.com'
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+// Validate caller is using service role key (internal functions only)
+function validateServiceRoleAuth(req: Request): boolean {
+  const authHeader = req.headers.get('Authorization')
+  if (!authHeader) return false
+
+  const token = authHeader.replace('Bearer ', '')
+  return token === SUPABASE_SERVICE_ROLE_KEY
 }
 
 // Email template types
@@ -235,6 +246,16 @@ serve(async (req) => {
   }
 
   try {
+    // SECURITY: Validate service role authentication
+    // Only internal edge functions (stripe-webhook, complete-service) should call this
+    if (!validateServiceRoleAuth(req)) {
+      console.error('Unauthorized send-email attempt (missing or invalid service role key)')
+      return new Response(JSON.stringify({ error: 'Unauthorized: service role key required' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
     // Parse request
     const body: EmailRequest = await req.json()
 
