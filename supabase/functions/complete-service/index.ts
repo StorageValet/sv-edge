@@ -1,4 +1,5 @@
 // Storage Valet — Complete Service Edge Function
+// v2.3 • Atomic completion + fail closed on item errors (fixes race condition, prevents duplicate emails)
 // v2.2 • Added transactional email sending via Resend (pickup_complete, delivery_complete)
 // v2.1 • Fixed staff schema reference (sv.staff not public.staff)
 // Marks pickup or delivery as completed and updates item statuses
@@ -167,9 +168,13 @@ serve(async (req) => {
 
       if (updateError) {
         console.error('Failed to update pickup items:', updateError)
-      } else {
-        console.log(`Updated ${action.pickup_item_ids.length} items to 'stored'`)
+        return new Response(JSON.stringify({ error: 'Failed to update pickup items' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
       }
+
+      console.log(`Updated ${action.pickup_item_ids.length} items to 'stored'`)
     }
 
     if (action.service_type === 'delivery' && action.delivery_item_ids?.length > 0) {
@@ -180,12 +185,17 @@ serve(async (req) => {
 
       if (updateError) {
         console.error('Failed to update delivery items:', updateError)
-      } else {
-        console.log(`Updated ${action.delivery_item_ids.length} items to 'home'`)
+        return new Response(JSON.stringify({ error: 'Failed to update delivery items' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
       }
+
+      console.log(`Updated ${action.delivery_item_ids.length} items to 'home'`)
     }
 
-    // Mark action as completed
+    // Mark action as completed (ATOMIC: only if still in completable state)
+    // This prevents race conditions where concurrent calls could both complete + email
     const { data: updatedAction, error: completeError } = await supabase
       .from('actions')
       .update({
@@ -194,13 +204,28 @@ serve(async (req) => {
         updated_at: new Date().toISOString()
       })
       .eq('id', action_id)
+      .in('status', ['confirmed', 'pending_confirmation'])
       .select()
-      .single()
+      .maybeSingle()
 
     if (completeError) {
       console.error('Failed to complete action:', completeError)
       return new Response(JSON.stringify({ error: 'Failed to complete action' }), {
         status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
+    // If no row returned, the action was not in a completable state (already completed or changed).
+    // Treat as idempotent success and DO NOT send email.
+    if (!updatedAction) {
+      console.log(`Action ${action_id} not completable (already completed or status changed). Skipping email.`)
+      return new Response(JSON.stringify({
+        ok: true,
+        already_completed: true,
+        message: 'Action already completed or not in a completable state'
+      }), {
+        status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
