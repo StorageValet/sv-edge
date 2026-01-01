@@ -77,6 +77,7 @@ serve(async (req) => {
         updated_at
       `)
       .eq('user_id', userId)
+      .neq('status', 'canceled')
       .order('scheduled_start', { ascending: true, nullsFirst: false })
 
     if (fetchError) {
