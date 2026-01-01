@@ -5,7 +5,8 @@
 // - invitee.created: Create/update action in pending_items state
 // - invitee.canceled: Mark action as canceled
 //
-// NOTE: HMAC verification DISABLED per CLAUDE.md (RLS provides data protection)
+// NOTE: This function uses the Supabase service-role key (bypasses RLS).
+// Signature verification is REQUIRED before processing any webhook event.
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -13,8 +14,80 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-// HMAC verification disabled - see CLAUDE.md "Known Workarounds"
-// Security is maintained via RLS on all tables
+const calendlySigningKey = Deno.env.get('CALENDLY_WEBHOOK_SIGNING_KEY')
+const MAX_CLOCK_SKEW_SECONDS = 5 * 60 // 5 minutes
+
+function parseCalendlySignatureHeader(headerValue: string): { t: string; v1: string } | null {
+  // Expected format: "t=1700000000,v1=<hex>" (per Calendly docs/examples)
+  const parts = headerValue.split(',').map((p) => p.trim())
+  const map = new Map<string, string>()
+  for (const part of parts) {
+    const [k, ...rest] = part.split('=')
+    if (!k || rest.length === 0) continue
+    map.set(k.trim(), rest.join('=').trim())
+  }
+  const t = map.get('t')
+  const v1 = map.get('v1')
+  if (!t || !v1) return null
+  return { t, v1 }
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  // Constant-time-ish compare for ASCII strings (prevents trivial timing leaks)
+  if (a.length !== b.length) return false
+  let out = 0
+  for (let i = 0; i < a.length; i++) out |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return out === 0
+}
+
+function isFreshTimestampSeconds(t: string): boolean {
+  const ts = Number(t)
+  if (!Number.isFinite(ts) || ts <= 0) return false
+  const now = Math.floor(Date.now() / 1000)
+  return Math.abs(now - ts) <= MAX_CLOCK_SKEW_SECONDS
+}
+
+function toHex(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf)
+  let hex = ''
+  for (const b of bytes) hex += b.toString(16).padStart(2, '0')
+  return hex
+}
+
+async function computeHmacSha256Hex(secret: string, payload: string): Promise<string> {
+  const enc = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(payload))
+  return toHex(sig)
+}
+
+async function verifyCalendlySignature(req: Request, rawBody: string): Promise<{ ok: true } | { ok: false; status: number; reason: string }> {
+  // Calendly sends signature header as "Calendly-Webhook-Signature"; some proxies lowercase it.
+  const headerValue = req.headers.get('calendly-webhook-signature') || req.headers.get('Calendly-Webhook-Signature')
+  if (!headerValue) return { ok: false, status: 401, reason: 'missing_signature_header' }
+
+  if (!calendlySigningKey) {
+    // Misconfiguration: fail closed rather than silently accepting unsigned webhooks.
+    return { ok: false, status: 500, reason: 'missing_signing_key_env' }
+  }
+
+  const parsed = parseCalendlySignatureHeader(headerValue)
+  if (!parsed) return { ok: false, status: 401, reason: 'invalid_signature_header_format' }
+  if (!isFreshTimestampSeconds(parsed.t)) return { ok: false, status: 401, reason: 'stale_signature_timestamp' }
+
+  // Per Calendly examples: signed payload is `${t}.${rawBody}`
+  const signedPayload = `${parsed.t}.${rawBody}`
+  const expected = await computeHmacSha256Hex(calendlySigningKey, signedPayload)
+  if (!constantTimeEqual(expected, parsed.v1)) return { ok: false, status: 401, reason: 'signature_mismatch' }
+
+  return { ok: true }
+}
 
 serve(async (req) => {
   // Handle CORS preflight
@@ -24,13 +97,23 @@ serve(async (req) => {
       headers: {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'content-type, calendly-webhook-signature',
+        'Access-Control-Allow-Headers': 'content-type, calendly-webhook-signature, calendly-webhook-timestamp',
       },
     })
   }
 
   try {
     const body = await req.text()
+
+    // Verify webhook authenticity BEFORE any side effects (DB writes, RPC calls)
+    const sig = await verifyCalendlySignature(req, body)
+    if (!sig.ok) {
+      console.error('❌ Calendly webhook rejected:', sig.reason)
+      return new Response(JSON.stringify({ error: 'Unauthorized', reason: sig.reason }), {
+        status: sig.status,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
     console.log('═══════════════════════════════════════════════════════════')
     console.log('CALENDLY WEBHOOK RECEIVED')
     console.log('═══════════════════════════════════════════════════════════')

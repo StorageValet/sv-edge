@@ -142,11 +142,16 @@ serve(async (req) => {
       )
     }
 
-    // Fetch selected items (RLS ensures user can only see their own items)
+    // Fetch selected items.
+    // IMPORTANT: this uses the service-role client, so RLS is NOT applied.
+    // We must explicitly scope by user_id to prevent cross-tenant manipulation.
+    const uniqueSelectedIds = Array.from(new Set<string>(selected_item_ids))
+
     const { data: items, error: itemsError } = await supabase
       .from('items')
-      .select('id, status')
-      .in('id', selected_item_ids)
+      .select('id, status, user_id')
+      .in('id', uniqueSelectedIds)
+      .eq('user_id', userId)
 
     if (itemsError) {
       console.error('Failed to fetch items:', itemsError)
@@ -155,6 +160,16 @@ serve(async (req) => {
         { status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
       )
     }
+
+    if (!itemsError && (!items || items.length !== uniqueSelectedIds.length)) {
+      console.error('Forbidden: one or more items do not belong to user')
+      return new Response(
+        JSON.stringify({ error: 'Forbidden: One or more items do not belong to user' }),
+        { status: 403, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
+      )
+    }
+
+    // At this point, all items are verified to belong to the authenticated user.
 
     // ═══════════════════════════════════════════════════════════════════════
     // PARTITION ITEMS: home → pickup, stored → delivery
@@ -166,7 +181,7 @@ serve(async (req) => {
     const pickupItemIds: string[] = []
     const deliveryItemIds: string[] = []
 
-    for (const item of items) {
+    for (const item of (items || [])) {
       if (item.status === 'home') {
         // Unscheduled home item → pickup
         pickupItemIds.push(item.id)
@@ -242,6 +257,7 @@ serve(async (req) => {
         .from('items')
         .update({ status: 'scheduled', updated_at: new Date().toISOString() })
         .in('id', addedIds)
+        .eq('user_id', userId)
 
       if (addError) {
         console.error('Failed to set added items to scheduled:', addError)
@@ -256,6 +272,7 @@ serve(async (req) => {
         .from('items')
         .update({ status: 'home', updated_at: new Date().toISOString() })
         .in('id', removedPickupIds)
+        .eq('user_id', userId)
 
       if (removePickupError) {
         console.error('Failed to set removed pickup items to home:', removePickupError)
@@ -270,6 +287,7 @@ serve(async (req) => {
         .from('items')
         .update({ status: 'stored', updated_at: new Date().toISOString() })
         .in('id', removedDeliveryIds)
+        .eq('user_id', userId)
 
       if (removeDeliveryError) {
         console.error('Failed to set removed delivery items to stored:', removeDeliveryError)
