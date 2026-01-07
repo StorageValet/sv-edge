@@ -1,6 +1,7 @@
 // Storage Valet — Framer Signup Webhook
-// v1.0 • Captures pre-payment registration data from Framer landing page
-// Date: December 6, 2025
+// v1.1 • Captures pre-payment registration data from marketing site
+// Date: January 7, 2026
+// Changes: Strict CORS (no wildcard, 403 for disallowed origins)
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -8,24 +9,64 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-// CORS headers for Framer form submissions
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
+// Allowed origins (marketing site only)
+const ALLOWED_ORIGINS = [
+  'https://storage-valet-website.vercel.app',  // Staging
+  'https://www.mystoragevalet.com',            // Production
+  'https://mystoragevalet.com',                // Apex
+]
+
+// Get CORS headers for a given origin (returns null if not allowed)
+function getCorsHeaders(origin: string | null): Record<string, string> | null {
+  if (!origin) {
+    // No origin header - return base headers without ACAO
+    return {
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
+    }
+  }
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    return {
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'content-type, authorization, x-client-info, apikey',
+    }
+  }
+  // Origin present but not allowed
+  return null
 }
 
 serve(async (req) => {
+  const origin = req.headers.get('Origin') || req.headers.get('origin')
+  const corsHeaders = getCorsHeaders(origin)
+
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
+    if (origin && !corsHeaders) {
+      // Origin present but not allowed
+      console.error(`CORS rejected for origin: ${origin}`)
+      return new Response('Forbidden', { status: 403 })
+    }
+    return new Response(null, { status: 204, headers: corsHeaders || {} })
   }
+
+  // Check CORS for non-OPTIONS requests
+  if (origin && !corsHeaders) {
+    console.error(`CORS rejected for origin: ${origin}`)
+    return new Response(JSON.stringify({ error: 'Forbidden' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' }
+    })
+  }
+
+  // Build response headers (may not include ACAO if no origin)
+  const responseHeaders = { ...corsHeaders, 'Content-Type': 'application/json' }
 
   // Only accept POST
   if (req.method !== 'POST') {
     return new Response(
       JSON.stringify({ error: 'Method not allowed' }),
-      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 405, headers: responseHeaders }
     )
   }
 
@@ -37,7 +78,7 @@ serve(async (req) => {
     } catch {
       return new Response(
         JSON.stringify({ error: 'Invalid JSON in request body' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 400, headers: responseHeaders }
       )
     }
 
@@ -57,7 +98,7 @@ serve(async (req) => {
           error: `Missing required fields: ${missingFields.join(', ')}`,
           missing: missingFields
         }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 400, headers: responseHeaders }
       )
     }
 
@@ -79,7 +120,7 @@ serve(async (req) => {
       console.log(`Invalid email format: ${email}`)
       return new Response(
         JSON.stringify({ error: 'Invalid email format' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 400, headers: responseHeaders }
       )
     }
 
@@ -134,7 +175,7 @@ serve(async (req) => {
           ? 'You are in our service area! Proceed to checkout.'
           : 'We are not yet in your area, but we have added you to our waitlist.'
       }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 200, headers: responseHeaders }
     )
 
   } catch (error) {
@@ -144,7 +185,7 @@ serve(async (req) => {
         error: error.message || 'Internal server error',
         success: false
       }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 500, headers: responseHeaders }
     )
   }
 })

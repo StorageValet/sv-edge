@@ -1,5 +1,6 @@
 // Storage Valet — Create Checkout Edge Function
-// v3.4 • Reuse existing Stripe customer to avoid duplicates
+// v3.5 • Strict CORS + dynamic return URLs based on origin
+// Date: January 7, 2026
 // NOTE: $299/month subscription is started MANUALLY 5-7 days after signup or at first pickup
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
@@ -13,17 +14,69 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
+// Allowed origins (marketing site only)
+const ALLOWED_ORIGINS = [
+  'https://storage-valet-website.vercel.app',  // Staging
+  'https://www.mystoragevalet.com',            // Production
+  'https://mystoragevalet.com',                // Apex
+]
+
+// Default base URL for return URLs when origin missing or not allowed
+const DEFAULT_BASE_URL = 'https://www.mystoragevalet.com'
+
+// Map origin to base URL for Stripe return URLs
+function getBaseUrl(origin: string | null): string {
+  if (!origin) return DEFAULT_BASE_URL
+  if (ALLOWED_ORIGINS.includes(origin)) return origin
+  return DEFAULT_BASE_URL
+}
+
+// Get CORS headers for a given origin (returns null if not allowed)
+function getCorsHeaders(origin: string | null): Record<string, string> | null {
+  if (!origin) {
+    // No origin header - return base headers without ACAO
+    return {
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    }
+  }
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    return {
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    }
+  }
+  // Origin present but not allowed
+  return null
+}
+
 serve(async (req) => {
+  const origin = req.headers.get('Origin') || req.headers.get('origin')
+  const corsHeaders = getCorsHeaders(origin)
+  const baseUrl = getBaseUrl(origin)
+
   // CORS preflight
   if (req.method === 'OPTIONS') {
-    return new Response('ok', {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-      },
+    if (origin && !corsHeaders) {
+      // Origin present but not allowed
+      console.error(`CORS rejected for origin: ${origin}`)
+      return new Response('Forbidden', { status: 403 })
+    }
+    return new Response(null, { status: 204, headers: corsHeaders || {} })
+  }
+
+  // Check CORS for non-OPTIONS requests
+  if (origin && !corsHeaders) {
+    console.error(`CORS rejected for origin: ${origin}`)
+    return new Response(JSON.stringify({ error: 'Forbidden' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' }
     })
   }
+
+  // Build response headers (may not include ACAO if no origin)
+  const responseHeaders = { ...corsHeaders, 'Content-Type': 'application/json' }
 
   try {
     // Parse request body (optional: referral_code, promo_code, email)
@@ -33,7 +86,7 @@ serve(async (req) => {
     } catch {
       return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+        headers: responseHeaders
       })
     }
 
@@ -92,6 +145,7 @@ serve(async (req) => {
     if (promo_code) metadata.promo_code = promo_code
 
     // Create Stripe Checkout Session for ONE-TIME PAYMENT (not subscription)
+    // Use origin-derived baseUrl for return URLs (defaults to www.mystoragevalet.com)
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: 'payment',
       customer_creation: 'always', // Ensure Stripe customer is created even for $0 promo checkouts
@@ -101,8 +155,8 @@ serve(async (req) => {
           quantity: 1,
         },
       ],
-      success_url: `${Deno.env.get('APP_URL') || 'https://portal.mystoragevalet.com'}/dashboard?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${Deno.env.get('APP_URL') || 'https://portal.mystoragevalet.com'}`,
+      success_url: `${baseUrl}/signup/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${baseUrl}/signup/canceled`,
       metadata,
       allow_promotion_codes: true, // Enable promo codes in Stripe UI (can discount/waive setup fee)
     }
@@ -117,27 +171,17 @@ serve(async (req) => {
 
     const session = await stripe.checkout.sessions.create(sessionParams)
 
+    console.log(`Checkout session created for ${email || 'unknown'}, redirecting to ${baseUrl}`)
+
     return new Response(
       JSON.stringify({ url: session.url }),
-      {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-      }
+      { status: 200, headers: responseHeaders }
     )
   } catch (error) {
     console.error('create-checkout error:', error)
     return new Response(
       JSON.stringify({ error: error.message || 'Internal server error' }),
-      {
-        status: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-      }
+      { status: 500, headers: responseHeaders }
     )
   }
 })
