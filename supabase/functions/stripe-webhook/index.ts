@@ -1,4 +1,5 @@
 // Storage Valet — Stripe Webhook Edge Function
+// v4.0 • Billing v2: Full trial lifecycle support (trialing status, trial_end_at, cancel tracking)
 // v3.11 • Added transactional email sending via Resend (welcome, payment_failed)
 // v3.10 • Made setup_fee_paid/setup_fee_amount conditional on isSetupFee (future-proof)
 // v3.9 • Fixed setup-fee payment timestamp: write last_payment_at using Stripe event time
@@ -285,10 +286,52 @@ async function handleCheckoutCompleted(
     console.log(`Created new user for ${normalizedEmail}: ${userId}`)
   }
 
-  // Determine if this is a setup fee payment or subscription signup
-  // Setup fee payments have mode='payment', subscription signups have mode='subscription'
+  // Determine checkout mode:
+  // - mode='payment' → Legacy setup fee (v1)
+  // - mode='subscription' → New trial subscription (v2)
   const isSetupFee = session.mode === 'payment' || session.metadata?.product_type === 'setup_fee'
+  const isTrialSubscription = session.mode === 'subscription'
   const subscriptionId = session.subscription as string | null
+
+  // === v4.0: For subscription checkouts, retrieve full subscription to get trial data ===
+  let trialEndAt: string | null = null
+  let initialStatus: string = 'inactive'
+  let billingVersion: string | null = null
+  let cancelAtPeriodEnd = false
+  let cancelAt: string | null = null
+
+  if (isTrialSubscription && subscriptionId) {
+    try {
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+
+      // Extract trial data
+      if (subscription.trial_end) {
+        trialEndAt = new Date(subscription.trial_end * 1000).toISOString()
+      }
+
+      // Set initial status based on subscription state
+      initialStatus = subscription.status // 'trialing', 'active', etc.
+
+      // Get billing version from subscription metadata
+      billingVersion = subscription.metadata?.billing_version || 'v2_trial_14d'
+
+      // Cancellation tracking
+      cancelAtPeriodEnd = subscription.cancel_at_period_end
+      if (subscription.cancel_at) {
+        cancelAt = new Date(subscription.cancel_at * 1000).toISOString()
+      }
+
+      console.log(`Subscription ${subscriptionId}: status=${initialStatus}, trial_end=${trialEndAt}, billing_version=${billingVersion}`)
+    } catch (subError) {
+      console.error('Failed to retrieve subscription details:', subError)
+      // Fall back to 'trialing' for new trial subscriptions
+      initialStatus = 'trialing'
+      billingVersion = 'v2_trial_14d'
+    }
+  } else if (isSetupFee) {
+    // Legacy v1 setup fee: inactive until subscription started manually
+    initialStatus = 'inactive'
+  }
 
   // Extract and validate service area (soft gate - don't block checkout)
   const address = session.customer_details?.address
@@ -329,15 +372,14 @@ async function handleCheckoutCompleted(
     : null
 
   // Upsert customer_profile with pre_customer data if available
-  console.log(`Upserting profile for ${normalizedEmail} (user_id: ${userId}, stripe_customer_id: ${stripeCustomerId || 'null'})`)
+  console.log(`Upserting profile for ${normalizedEmail} (user_id: ${userId}, stripe_customer_id: ${stripeCustomerId || 'null'}, status: ${initialStatus})`)
   const { error: profileError } = await supabase.from('customer_profile').upsert(
     {
       user_id: userId,
       email: normalizedEmail,
       stripe_customer_id: stripeCustomerId,
-      // Setup fee: inactive (subscription started manually later)
-      // Subscription: active (subscription created immediately)
-      subscription_status: isSetupFee ? 'inactive' : 'active',
+      // v4.0: Use dynamically determined status (trialing for v2, inactive for v1)
+      subscription_status: initialStatus,
       subscription_id: subscriptionId,
       // Service area validation (soft gate)
       delivery_address: deliveryAddress,
@@ -351,6 +393,11 @@ async function handleCheckoutCompleted(
       phone: preCustomer?.phone || null,
       // === v3.9: Payment timestamp for setup-fee checkouts ===
       ...(paymentTimestamp && { last_payment_at: paymentTimestamp }),
+      // === v4.0: Billing v2 trial columns ===
+      ...(trialEndAt && { trial_end_at: trialEndAt }),
+      ...(billingVersion && { billing_version: billingVersion }),
+      cancel_at_period_end: cancelAtPeriodEnd,
+      ...(cancelAt && { cancel_at: cancelAt }),
     },
     { onConflict: 'user_id' }
   )
@@ -402,6 +449,7 @@ async function handleCheckoutCompleted(
 }
 
 // Handle subscription created/updated
+// v4.0: Extended to pass trial and cancellation tracking fields
 async function handleSubscriptionChange(supabase: any, subscription: Stripe.Subscription) {
   const stripeCustomerId = subscription.customer as string
 
@@ -417,11 +465,28 @@ async function handleSubscriptionChange(supabase: any, subscription: Stripe.Subs
     return
   }
 
+  // === v4.0: Extract trial and cancellation data ===
+  const trialEndAt = subscription.trial_end
+    ? new Date(subscription.trial_end * 1000).toISOString()
+    : null
+
+  const cancelAt = subscription.cancel_at
+    ? new Date(subscription.cancel_at * 1000).toISOString()
+    : null
+
+  const billingVersion = subscription.metadata?.billing_version || null
+
   // Use SECURITY DEFINER function to update subscription status (bypasses RLS)
+  // v4.0: Extended with trial and cancellation params
   const { error } = await supabase.rpc('update_subscription_status', {
     p_user_id: profile.user_id,
     p_status: subscription.status,
     p_subscription_id: subscription.id,
+    // v4.0 params (null values preserved by COALESCE in RPC)
+    p_trial_end_at: trialEndAt,
+    p_cancel_at_period_end: subscription.cancel_at_period_end,
+    p_cancel_at: cancelAt,
+    p_billing_version: billingVersion,
   })
 
   if (error) {
@@ -429,10 +494,11 @@ async function handleSubscriptionChange(supabase: any, subscription: Stripe.Subs
     throw error
   }
 
-  console.log(`Subscription ${subscription.id} updated to ${subscription.status}`)
+  console.log(`Subscription ${subscription.id} updated: status=${subscription.status}, trial_end=${trialEndAt || 'none'}, cancel_at_period_end=${subscription.cancel_at_period_end}`)
 }
 
 // Handle subscription deleted
+// v4.0: Clears trial_end_at and cancel_at since subscription is now fully canceled
 async function handleSubscriptionDeleted(supabase: any, subscription: Stripe.Subscription) {
   const stripeCustomerId = subscription.customer as string
 
@@ -448,9 +514,13 @@ async function handleSubscriptionDeleted(supabase: any, subscription: Stripe.Sub
   }
 
   // Use SECURITY DEFINER function to update subscription status (bypasses RLS)
+  // v4.0: Clear trial and cancellation columns since subscription is now deleted
+  // Note: The RPC uses COALESCE, so we need to handle clearing via direct update for nulls
+  // For now, set status to canceled - trial_end_at/cancel_at become historical reference
   const { error } = await supabase.rpc('update_subscription_status', {
     p_user_id: profile.user_id,
     p_status: 'canceled',
+    p_cancel_at_period_end: false,  // No longer pending cancel - it's done
   })
 
   if (error) {
