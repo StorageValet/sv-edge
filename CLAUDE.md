@@ -241,6 +241,25 @@ This block ensures:
 
 ---
 
+## 🔐 Security & Secrets Handling
+
+**Policy (non-negotiable):**
+- Never paste secrets into chat, docs, or commits.
+- Never ask a human to paste secrets into chat.
+- 1Password CLI (`op`) is the approved source of truth for secrets.
+- Secrets must be fetched via `op` and injected directly into Supabase/Vercel/etc without being printed or logged.
+- If a secret appears in any persistent text channel, treat it as compromised and rotate immediately.
+- Do not store secrets in `.zshrc` / `.zprofile`. Aliases that fetch from `op` are acceptable, but secrets must not be hardcoded.
+
+**Approved Pattern:**
+```bash
+# Inject secret directly without echoing
+op item get "Stripe Live" --vault "API Credentials" --fields webhook_secret \
+  | xargs -I {} supabase secrets set STRIPE_WEBHOOK_SECRET="{}"
+```
+
+---
+
 # sv-edge - Storage Valet Edge Functions
 **Last Updated:** 2025-11-27
 **Critical:** ALL functions must deploy with --no-verify-jwt flag
